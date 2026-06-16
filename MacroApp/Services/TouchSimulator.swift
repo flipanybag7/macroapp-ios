@@ -51,7 +51,7 @@ final class TouchSimulator {
         guard let c = client, let cd = createDigitizerRaw, let dp = dispatchRaw else { return }
         let fn = unsafeBitCast(cd, to: CreateDigitizerC.self)
         let mask: UInt32 = isUp ? 0x01 : (0x01 | 0x02 | 0x04)
-        guard let ev = fn(kCFAllocatorDefault, ts(), 3, 0, 2, mask, 0,
+        guard let ev = fn(kCFAllocatorDefault, ts(), 11, 0, 2, mask, 0,
                           iofix(point.x), iofix(point.y), 0,
                           isDown ? iofix(1.0) : 0, 0,
                           !isUp, !isUp, 0) else { return }
