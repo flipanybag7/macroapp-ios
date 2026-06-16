@@ -41,6 +41,8 @@ jobs:
           cp -R build/MacroApp.xcarchive/Products/Applications/MacroApp.app Payload/
           brew install ldid-procursus 2>/dev/null || brew install ldid
           ldid -SMacroApp/entitlements.plist Payload/MacroApp.app/MacroApp
+          echo "=== Entitlements check ==="
+          ldid -e Payload/MacroApp.app/MacroApp
           zip -r MacroApp.ipa Payload
           rm -rf Payload
 
