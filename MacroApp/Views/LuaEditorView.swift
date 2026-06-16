@@ -225,21 +225,22 @@ struct LuaEditorView: View {
 
         LuaEngine.shared.runScript(scriptText) { actions in
             output += "Parsed \(actions.count) actions\n"
+            if actions.isEmpty {
+                output += "(no touch actions found — script may use variables/custom functions)\n"
+            }
             for (i, action) in actions.enumerated() {
                 output += "  [\(i + 1)] \(action.type.rawValue)"
                 if let p = action.startPoint {
                     output += " at (\(Int(p.x)), \(Int(p.y)))"
                 }
-                output += " delay: \(String(format: "%.2f", action.delay))s\n"
+                output += "\n"
             }
 
             if TouchSimulator.shared.canSimulateTouches {
-                output += "\nRunning on device...\n"
-                let player = MacroPlayer()
-                player.loadActions(actions)
-                player.play { _, _ in }
+                output += "\nExecuting touches...\n"
+                LuaEngine.shared.runWithSimulation(scriptText)
             } else {
-                output += "\n(JB not detected -- script parsed only)\n"
+                output += "\n(JB not detected — parsed only)\n"
             }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

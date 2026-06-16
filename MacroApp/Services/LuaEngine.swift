@@ -62,33 +62,56 @@ final class LuaEngine: ObservableObject {
         }
     }
 
-    private func executeScript(_ script: String) -> [MacroAction] {
+    private func executeScript(_ raw: String) -> [MacroAction] {
         var actions: [MacroAction] = []
-        let lines = script.components(separatedBy: .newlines)
+        var variables: [String: Double] = [:]
+
+        let lines = raw.components(separatedBy: .newlines)
 
         for (lineNum, line) in lines.enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let t = line.trimmingCharacters(in: .whitespaces)
+
+            if t.isEmpty || t.hasPrefix("--") { continue }
 
             DispatchQueue.main.async { [weak self] in
                 self?.currentLine = lineNum + 1
             }
 
-            if trimmed.hasPrefix("usleep(") {
-                let microseconds = extractNumber(from: trimmed, prefix: "usleep(")
-                let seconds = microseconds / 1_000_000
-                Thread.sleep(forTimeInterval: seconds)
+            if t.hasPrefix("local ") {
+                if let (name, val) = parseAssignment(t) {
+                    variables[name] = val
+                }
                 continue
             }
 
-            if trimmed.hasPrefix("touchDown(") {
-                let parts = trimmed
-                    .replacingOccurrences(of: "touchDown(", with: "")
-                    .replacingOccurrences(of: ")", with: "")
-                    .components(separatedBy: ",")
-                    .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-                if parts.count >= 3 {
-                    let point = CGPoint(x: parts[1], y: parts[2])
-                    actions.append(.tap(at: point, delay: 0))
+            if t.hasPrefix("usleep("), let num = extractParenNum(t) {
+                let sec = num / 1_000_000
+                Thread.sleep(forTimeInterval: sec)
+                continue
+            }
+
+            if let (fn, args) = parseCall(t) {
+                let vals = args.map { evalExpr($0, vars: variables) }
+                if fn == "touchDown", vals.count >= 3 {
+                    let pt = CGPoint(x: vals[1], y: vals[2])
+                    actions.append(.tap(at: pt, delay: 0))
+                } else if fn == "touchMove", vals.count >= 3 {
+                    // tracked via the touchDown that started it
+                } else if fn == "touchUp", vals.count >= 3 {
+                    // tracked via the touchDown that started it
+                }
+                continue
+            }
+
+            if t.hasPrefix("for ") {
+                let (iterVar, from, to, body) = parseFor(t, remainingLines: Array(lines[(lineNum + 1)...]))
+                if let iv = iterVar {
+                    for i in Int(from)...Int(to) {
+                        variables[iv] = Double(i)
+                        let subActions = executeScript(body.joined(separator: "\n"))
+                        actions.append(contentsOf: subActions)
+                    }
+                    break
                 }
             }
         }
@@ -97,133 +120,166 @@ final class LuaEngine: ObservableObject {
     }
 
     func parseScript(_ script: String) -> [MacroAction] {
-        return LuaScriptGenerator.parseFromLua(script)
+        return executeScript(script)
     }
 
-    private func extractNumber(from str: String, prefix: String) -> Double {
-        let numStr = str
-            .replacingOccurrences(of: prefix, with: "")
-            .replacingOccurrences(of: ")", with: "")
+    // --- helpers ---
+
+    private func parseAssignment(_ line: String) -> (String, Double)? {
+        let cleaned = line
+            .replacingOccurrences(of: "local ", with: "")
             .trimmingCharacters(in: .whitespaces)
-        return Double(numStr) ?? 0
+        let parts = cleaned.components(separatedBy: "=").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2 else { return nil }
+        let name = parts[0]
+        let expr = parts[1]
+        let val = evalExpr(expr, vars: [:])
+        return (name, val)
+    }
+
+    private func evalExpr(_ expr: String, vars: [String: Double]) -> Double {
+        let e = expr.trimmingCharacters(in: .whitespaces)
+
+        // math.random(a, b)
+        if e.hasPrefix("math.random("), e.hasSuffix(")") {
+            let inner = String(e.dropFirst("math.random(".count).dropLast(1))
+            let nums = inner.components(separatedBy: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            if nums.count == 2 {
+                return Double(Int.random(in: Int(nums[0])...Int(nums[1])))
+            }
+        }
+
+        // simple arithmetic: a + b, a - b, a * b, a / b
+        if e.contains("+") {
+            let parts = e.components(separatedBy: "+")
+            return parts.reduce(0) { $0 + (Double($1.trimmingCharacters(in: .whitespaces)) ?? vars[$1.trimmingCharacters(in: .whitespaces)] ?? 0) }
+        }
+        if e.contains("-"), !e.hasPrefix("-") {
+            let parts = e.components(separatedBy: "-")
+            if parts.count == 2 {
+                let a = Double(parts[0].trimmingCharacters(in: .whitespaces)) ?? vars[parts[0].trimmingCharacters(in: .whitespaces)] ?? 0
+                let b = Double(parts[1].trimmingCharacters(in: .whitespaces)) ?? vars[parts[1].trimmingCharacters(in: .whitespaces)] ?? 0
+                return a - b
+            }
+        }
+        if e.contains("*") {
+            let parts = e.components(separatedBy: "*")
+            return parts.reduce(1) { $0 * (Double($1.trimmingCharacters(in: .whitespaces)) ?? vars[$1.trimmingCharacters(in: .whitespaces)] ?? 1) }
+        }
+        if e.contains("/"), !e.hasPrefix("/") {
+            let parts = e.components(separatedBy: "/")
+            if parts.count == 2 {
+                let a = Double(parts[0].trimmingCharacters(in: .whitespaces)) ?? vars[parts[0].trimmingCharacters(in: .whitespaces)] ?? 0
+                let b = Double(parts[1].trimmingCharacters(in: .whitespaces)) ?? vars[parts[1].trimmingCharacters(in: .whitespaces)] ?? 1
+                return b != 0 ? a / b : 0
+            }
+        }
+
+        // variable lookup
+        if let v = vars[e] { return v }
+        // plain number
+        return Double(e) ?? 0
+    }
+
+    private func extractParenNum(_ s: String) -> Double? {
+        guard let start = s.firstIndex(of: "("), let end = s.lastIndex(of: ")"), start < end else { return nil }
+        let inside = String(s[s.index(after: start)..<end]).trimmingCharacters(in: .whitespaces)
+        return Double(inside)
+    }
+
+    private func parseCall(_ line: String) -> (String, [String])? {
+        guard let paren = line.firstIndex(of: "("), line.hasSuffix(")") else { return nil }
+        let fn = String(line[..<paren]).trimmingCharacters(in: .whitespaces)
+        let argsRaw = String(line[line.index(after: paren)..<line.index(before: line.endIndex)])
+        let args = argsRaw.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        return (fn, args)
+    }
+
+    private func parseFor(_ line: String, remainingLines: [String]) -> (String?, Double, Double, [String]) {
+        let parts = line.components(separatedBy: "=")
+        guard parts.count == 2 else { return (nil, 0, 0, []) }
+
+        let left = parts[0].replacingOccurrences(of: "for ", with: "").trimmingCharacters(in: .whitespaces)
+        let comps = left.components(separatedBy: ",")
+        guard comps.count == 2 else { return (nil, 0, 0, []) }
+        let iterVar = comps[0].trimmingCharacters(in: .whitespaces)
+
+        let right = parts[1].trimmingCharacters(in: .whitespaces)
+        let rangeParts = right.components(separatedBy: " ")
+        guard rangeParts.count >= 3, rangeParts[1] == "do" else { return (nil, 0, 0, []) }
+
+        let from = Double(rangeParts[0]) ?? 0
+        var to: Double = 0
+        if let endIdx = rangeParts[2].firstIndex(of: ")") {
+            to = Double(String(rangeParts[2][..<endIdx])) ?? 0
+        } else {
+            to = Double(rangeParts[2]) ?? 0
+        }
+
+        var body: [String] = []
+        var depth = 1
+        for rline in remainingLines {
+            let rt = rline.trimmingCharacters(in: .whitespaces)
+            if rt == "end" || rt.hasPrefix("end ") {
+                depth -= 1
+                if depth == 0 { break }
+            }
+            if rt.hasPrefix("for ") { depth += 1 }
+            body.append(rline)
+        }
+        return (iterVar, from, to, body)
     }
 
     func runWithSimulation(_ script: String) {
-        let actions = parseScript(script)
-        guard !actions.isEmpty else { return }
+        _executeWithInject(script)
+    }
 
-        isRunning = true
+    private func _executeWithInject(_ raw: String) {
+        var variables: [String: Double] = [:]
+        let lines = raw.components(separatedBy: .newlines)
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            for (index, action) in actions.enumerated() {
-                guard self?.isRunning == true else { break }
+        for (lineNum, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.isEmpty || t.hasPrefix("--") { continue }
 
-                DispatchQueue.main.async {
-                    self?.currentLine = index + 1
+            DispatchQueue.main.async { [weak self] in
+                self?.currentLine = lineNum + 1
+            }
+
+            if t.hasPrefix("local ") {
+                if let (name, val) = parseAssignment(t) {
+                    variables[name] = val
                 }
+                continue
+            }
 
-                Thread.sleep(forTimeInterval: action.delay)
+            if t.hasPrefix("usleep("), let num = extractParenNum(t) {
+                Thread.sleep(forTimeInterval: num / 1_000_000)
+                continue
+            }
 
-                switch action.type {
-                case .tap:
-                    if let point = action.startPoint {
-                        self?.simulateTap(at: point)
+            if let (fn, args) = parseCall(t) {
+                let vals = args.map { evalExpr($0, vars: variables) }
+                if fn == "touchDown", vals.count >= 3 {
+                    TouchSimulator.shared.touchDown(at: CGPoint(x: vals[1], y: vals[2]), fingerId: Int32(vals[0]))
+                } else if fn == "touchMove", vals.count >= 3 {
+                    TouchSimulator.shared.touchMove(to: CGPoint(x: vals[1], y: vals[2]), fingerId: Int32(vals[0]))
+                } else if fn == "touchUp", vals.count >= 3 {
+                    TouchSimulator.shared.touchUp(at: CGPoint(x: vals[1], y: vals[2]), fingerId: Int32(vals[0]))
+                }
+                continue
+            }
+
+            if t.hasPrefix("for ") {
+                let (iterVar, from, to, body) = parseFor(t, remainingLines: Array(lines[(lineNum + 1)...]))
+                if let iv = iterVar {
+                    for i in Int(from)...Int(to) {
+                        variables[iv] = Double(i)
+                        _executeWithInject(body.joined(separator: "\n"))
                     }
-                case .swipe:
-                    if let start = action.startPoint, let end = action.endPoint {
-                        self?.simulateSwipe(from: start, to: end, duration: action.duration)
-                    }
-                case .longPress:
-                    if let point = action.startPoint {
-                        self?.simulateLongPress(at: point, duration: action.duration)
-                    }
-                case .wait:
-                    Thread.sleep(forTimeInterval: action.duration)
-                case .scroll:
-                    self?.simulateScroll(delta: action.scrollDelta ?? 0)
-                case .keyPress:
                     break
                 }
             }
-
-            DispatchQueue.main.async {
-                self?.isRunning = false
-            }
-        }
-    }
-
-    private func simulateTap(at point: CGPoint) {
-        DispatchQueue.main.async {
-            guard let window = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .first?.windows
-                .first(where: { $0.isKeyWindow }) else { return }
-
-            let touch = UITouch()
-            let event = UIEvent()
-            window.hitTest(point, with: event)?.touchesBegan([touch], with: event)
-            window.hitTest(point, with: event)?.touchesEnded([touch], with: event)
-        }
-    }
-
-    private func simulateSwipe(from: CGPoint, to: CGPoint, duration: TimeInterval) {
-        let steps = max(5, Int(duration * 60))
-        let stepDelay = duration / Double(steps)
-
-        for i in 0...steps {
-            let t = Double(i) / Double(steps)
-            let x = from.x + (to.x - from.x) * t
-            let y = from.y + (to.y - from.y) * t
-            _ = CGPoint(x: x, y: y)
-
-            DispatchQueue.main.async {
-                guard let window = UIApplication.shared.connectedScenes
-                    .compactMap({ $0 as? UIWindowScene })
-                    .first?.windows
-                    .first(where: { $0.isKeyWindow }) else { return }
-                window.bringSubviewToFront(window)
-            }
-
-            Thread.sleep(forTimeInterval: stepDelay)
-        }
-    }
-
-    private func simulateLongPress(at point: CGPoint, duration: TimeInterval) {
-        DispatchQueue.main.async {
-            guard let window = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .first?.windows
-                .first(where: { $0.isKeyWindow }) else { return }
-            let touch = UITouch()
-            let event = UIEvent()
-            window.hitTest(point, with: event)?.touchesBegan([touch], with: event)
-        }
-
-        Thread.sleep(forTimeInterval: duration)
-
-        DispatchQueue.main.async {
-            guard let window = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .first?.windows
-                .first(where: { $0.isKeyWindow }) else { return }
-            let touch = UITouch()
-            let event = UIEvent()
-            window.hitTest(point, with: event)?.touchesEnded([touch], with: event)
-        }
-    }
-
-    private func simulateScroll(delta: CGFloat) {
-        DispatchQueue.main.async {
-            guard let window = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .first?.windows
-                .first(where: { $0.isKeyWindow }) else { return }
-
-            let center = CGPoint(x: window.bounds.midX, y: window.bounds.midY)
-            window.hitTest(center, with: nil)?.layer.position = CGPoint(
-                x: center.x,
-                y: center.y + delta
-            )
         }
     }
 }
