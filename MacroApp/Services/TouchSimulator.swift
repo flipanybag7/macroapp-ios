@@ -77,14 +77,14 @@ final class TouchSimulator {
         let digMask: UInt32 = touch ? 0x07 : 0x01
 
         let createDig = unsafeBitCast(cd, to: CreateDigitizerC.self)
-        guard let digEvent = createDig(kCFAllocatorDefault, time, 11, 0, 1, digMask, 0,
-                                       ix, iy, 0, pr, 0, touch, touch, 0) else {
+        guard let digEvent = createDig(kCFAllocatorDefault, time, 3, 0, 2, 1, 0,
+                                       0, 0, 0, 0, 0, true, false, 0) else {
             print("🔴 digEvent is nil")
             return
         }
 
         let createFinger = unsafeBitCast(cf, to: CreateFingerC.self)
-        guard let fingerEvent = createFinger(kCFAllocatorDefault, time, 1, 1, digMask,
+        guard let fingerEvent = createFinger(kCFAllocatorDefault, time, 0, 2, digMask,
                                              ix, iy, 0, pr, 0, touch, touch, 0) else {
             print("🔴 fingerEvent is nil")
             return
