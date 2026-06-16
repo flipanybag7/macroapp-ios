@@ -232,8 +232,15 @@ struct LuaEditorView: View {
                 }
                 output += " delay: \(String(format: "%.2f", action.delay))s\n"
             }
-            output += "\nSimulating...\n"
-            LuaEngine.shared.runWithSimulation(scriptText)
+
+            if TouchSimulator.shared.canSimulateTouches {
+                output += "\nRunning on device...\n"
+                var player = MacroPlayer()
+                player.loadActions(actions)
+                player.play { _, _ in }
+            } else {
+                output += "\n(JB not detected -- script parsed only)\n"
+            }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 output += "Done!\n"

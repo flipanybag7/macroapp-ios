@@ -216,6 +216,13 @@ struct RecordView: View {
                 Text("\(recordedActions.count) actions")
                     .font(.caption)
                     .foregroundColor(.gray)
+
+                if !recordedActions.isEmpty {
+                    Text(TouchSimulator.shared.canSimulateTouches ? "JB:ON" : "JB:OFF")
+                        .font(.system(size: 9))
+                        .foregroundColor(TouchSimulator.shared.canSimulateTouches ? .green : .gray)
+                        .padding(.leading, 4)
+                }
             }
             .padding(.horizontal, 16)
             .foregroundColor(.white)

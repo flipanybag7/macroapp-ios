@@ -8,6 +8,10 @@ struct MacroListView: View {
     @State private var macroToDelete: MacroFile?
     @State private var showLuaSheet = false
     @State private var luaMacro: MacroFile?
+    @State private var showRenameAlert = false
+    @State private var macroToRename: MacroFile?
+    @State private var renameText = ""
+    @State private var showEditSheet = false
 
     var body: some View {
         NavigationView {
@@ -41,6 +45,27 @@ struct MacroListView: View {
                 if let macro = luaMacro {
                     LuaPreviewView(actions: macro.actions, macroName: macro.name)
                 }
+            }
+            .sheet(isPresented: $showEditSheet) {
+                if let macro = selectedMacro {
+                    MacroEditView(macro: macro) {
+                        refreshMacros()
+                    }
+                }
+            }
+            .alert("Rename Macro", isPresented: $showRenameAlert) {
+                TextField("Name", text: $renameText)
+                Button("Cancel", role: .cancel) { }
+                Button("Save") {
+                    if let m = macroToRename {
+                        var updated = m
+                        updated.name = renameText.isEmpty ? "Untitled" : renameText
+                        try? MacroFileStore.save(updated)
+                        refreshMacros()
+                    }
+                }
+            } message: {
+                Text("Enter a new name")
             }
             .alert("Delete Macro", isPresented: $showDeleteAlert, presenting: macroToDelete) { macro in
                 Button("Cancel", role: .cancel) { }
@@ -93,6 +118,14 @@ struct MacroListView: View {
                             Label("Lua", systemImage: "doc.text")
                         }
                         .tint(.orange)
+                        Button {
+                            macroToRename = macro
+                            renameText = macro.name
+                            showRenameAlert = true
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
+                        .tint(.blue)
                     }
             }
         }
@@ -129,6 +162,34 @@ struct MacroListView: View {
                 actionTypeChips(for: macro)
             }
             .padding(.vertical, 4)
+        }
+        .contextMenu {
+            Button {
+                selectedMacro = macro
+                showEditSheet = true
+            } label: {
+                Label("Edit Actions", systemImage: "slider.horizontal.3")
+            }
+            Button {
+                macroToRename = macro
+                renameText = macro.name
+                showRenameAlert = true
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            Button {
+                luaMacro = macro
+                showLuaSheet = true
+            } label: {
+                Label("View Lua", systemImage: "doc.text")
+            }
+            Divider()
+            Button(role: .destructive) {
+                macroToDelete = macro
+                showDeleteAlert = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
         }
     }
 
