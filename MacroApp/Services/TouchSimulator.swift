@@ -1,174 +1,170 @@
 import Foundation
 import CoreGraphics
+import Darwin
+
+typealias IOHIDRef = UnsafeMutableRawPointer
+
+private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef
+private typealias DispatchC = @convention(c) (IOHIDRef, IOHIDRef) -> Void
+private typealias AppendC = @convention(c) (IOHIDRef, IOHIDRef) -> Void
+private typealias CreateFingerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef
+private typealias CreateDigitizerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef
 
 @_silgen_name("dlopen")
-internal func _dlopen(_ path: UnsafePointer<CChar>, _ mode: Int32) -> UnsafeMutableRawPointer?
+private func _dlopen(_ path: UnsafePointer<CChar>, _ mode: Int32) -> UnsafeMutableRawPointer?
 
 @_silgen_name("dlsym")
-internal func _dlsym(_ handle: UnsafeMutableRawPointer?, _ symbol: UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
+private func _dlsym(_ handle: UnsafeMutableRawPointer?, _ symbol: UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
 
-@_silgen_name("dlclose")
-internal func _dlclose(_ handle: UnsafeMutableRawPointer?) -> Int32
-
-struct GSEventRecord {
-    var type: UInt32 = 0
-    var subtype: UInt32 = 0
-    var location: CGPoint = .zero
-    var windowLocation: CGPoint = .zero
-    var info0: Int32 = 0
-    var info1: Int32 = 0
-    var info2: Int32 = 0
-    var info3: Int32 = 0
-    var info4: Int32 = 0
-    var info5: Int32 = 0
-    var info6: Int32 = 0
-    var info7: Int32 = 0
-    var pressure: Float = 1.0
-    var timestamp: Double = 0
-}
+@_silgen_name("mach_absolute_time")
+private func _mach_absolute_time() -> UInt64
 
 final class TouchSimulator {
     static let shared = TouchSimulator()
 
-    private let kGSHandEvent: UInt32 = 3001
-    private let gsEventSubtypeDown: UInt32 = 1
-    private let gsEventSubtypeMove: UInt32 = 2
-    private let gsEventSubtypeUp: UInt32 = 3
+    private var handle: UnsafeMutableRawPointer?
+    private var client: IOHIDRef?
 
-    typealias GSSendEventFunc = @convention(c) (UnsafePointer<GSEventRecord>, UInt32) -> Void
-    typealias GSCreatePurplePortFunc = @convention(c) () -> UInt32
+    private var createDigitizerPtr: UnsafeMutableRawPointer?
+    private var createFingerPtr: UnsafeMutableRawPointer?
+    private var appendEventPtr: UnsafeMutableRawPointer?
+    private var dispatchEventPtr: UnsafeMutableRawPointer?
 
-    private var gsSendEvent: GSSendEventFunc?
-    private var gsCreatePurplePort: GSCreatePurplePortFunc?
-    private var gsAvailable: Bool = false
-
-    var canSimulateTouches: Bool { gsAvailable }
+    private(set) var canSimulateTouches = false
 
     private init() {
         #if targetEnvironment(simulator)
-        gsAvailable = false
         return
         #endif
 
-        guard isDeviceJailbroken() else {
-            gsAvailable = false
-            return
-        }
-
-        loadGraphicsServices()
+        guard isJailbroken() else { return }
+        loadIOKit()
     }
 
-    private func isDeviceJailbroken() -> Bool {
-        let paths: [String] = [
+    private func isJailbroken() -> Bool {
+        let paths = [
             "/Applications/Cydia.app",
             "/Library/MobileSubstrate/MobileSubstrate.dylib",
             "/bin/bash",
-            "/usr/sbin/sshd",
             "/etc/apt",
-            "/var/lib/dpkg",
             "/var/jb",
             "/private/preboot/jb"
         ]
-
-        for path in paths {
-            if access(path, F_OK) == 0 {
-                return true
-            }
+        for p in paths {
+            if access(p, F_OK) == 0 { return true }
         }
-
-        let testPath = "/var/mobile/Library/jb_test"
+        let t = "/var/mobile/Library/jbchk"
         do {
-            try "jb".write(toFile: testPath, atomically: true, encoding: .utf8)
-            try FileManager.default.removeItem(atPath: testPath)
+            try "." .write(toFile: t, atomically: true, encoding: .utf8)
+            try FileManager.default.removeItem(atPath: t)
             return true
-        } catch {
-            return false
-        }
+        } catch { }
+        return false
     }
 
-    private func loadGraphicsServices() {
-        let gsPaths = [
-            "/System/Library/PrivateFrameworks/GraphicsServices.framework/GraphicsServices",
-            "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices"
-        ]
-
-        for gsPath in gsPaths {
-            guard let handle = _dlopen(gsPath, RTLD_NOW) else { continue }
-
-            let sendSymbol = "GSSendEvent"
-            let portSymbol = "GSCreatePurplePort"
-
-            guard let sendPtr = _dlsym(handle, sendSymbol),
-                  let portPtr = _dlsym(handle, portSymbol) else {
-                _dlclose(handle)
-                continue
-            }
-
-            gsSendEvent = unsafeBitCast(sendPtr, to: GSSendEventFunc.self)
-            gsCreatePurplePort = unsafeBitCast(portPtr, to: GSCreatePurplePortFunc.self)
-            gsAvailable = true
+    private func loadIOKit() {
+        guard let h = _dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else {
             return
         }
+        handle = h
+
+        let syms: [(String, UnsafeMutableRawPointer?)] = [
+            ("IOHIDEventSystemClientCreate", nil),
+            ("IOHIDEventSystemClientDispatchEvent", nil),
+            ("IOHIDEventAppendEvent", nil),
+            ("IOHIDEventCreateDigitizerFingerEvent", nil),
+            ("IOHIDEventCreateDigitizerEvent", nil),
+        ]
+
+        var resolved: [String: UnsafeMutableRawPointer] = [:]
+        for (name, _) in syms {
+            if let ptr = _dlsym(h, name) {
+                resolved[name] = ptr
+            } else {
+                return
+            }
+        }
+
+        guard let createClientRaw = resolved["IOHIDEventSystemClientCreate"] else { return }
+        let createClient = unsafeBitCast(createClientRaw, to: CreateClientC.self)
+        guard let c = createClient(kCFAllocatorDefault) else { return }
+
+        client = c
+        createDigitizerPtr = resolved["IOHIDEventCreateDigitizerEvent"]
+        createFingerPtr = resolved["IOHIDEventCreateDigitizerFingerEvent"]
+        appendEventPtr = resolved["IOHIDEventAppendEvent"]
+        dispatchEventPtr = resolved["IOHIDEventSystemClientDispatchEvent"]
+        canSimulateTouches = true
+    }
+
+    private func iofix(_ v: CGFloat) -> Int32 { Int32(v * 65536) }
+    private func ts() -> UInt64 { _mach_absolute_time() }
+
+    private func parentEvent() -> IOHIDRef? {
+        guard let p = createDigitizerPtr else { return nil }
+        let fn = unsafeBitCast(p, to: CreateDigitizerC.self)
+        return fn(kCFAllocatorDefault, ts(), 3, 0, 2, 0x01, 0, 0, 0, 0, 0, 0, true, false, 0)
+    }
+
+    private func fingerEvent(at point: CGPoint, touch: Bool, range: Bool) -> IOHIDRef? {
+        guard let p = createFingerPtr else { return nil }
+        let fn = unsafeBitCast(p, to: CreateFingerC.self)
+        return fn(kCFAllocatorDefault, ts(), 0, 2, 0x01|0x02|0x04,
+                  iofix(point.x), iofix(point.y), 0,
+                  iofix(touch ? 30 : 0), 0, range, touch, 0)
+    }
+
+    private func post(_ finger: IOHIDRef) {
+        guard let c = client, let parent = parentEvent(),
+              let app = appendEventPtr, let dsp = dispatchEventPtr else { return }
+        let append = unsafeBitCast(app, to: AppendC.self)
+        append(parent, finger)
+        let dispatch = unsafeBitCast(dsp, to: DispatchC.self)
+        dispatch(c, parent)
     }
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) {
-        guard gsAvailable else { return }
-        sendHandEvent(at: point, subtype: gsEventSubtypeDown, fingerId: fingerId)
+        guard canSimulateTouches, let ev = fingerEvent(at: point, touch: true, range: true) else { return }
+        post(ev)
     }
 
     func touchMove(to point: CGPoint, fingerId: Int32 = 0) {
-        guard gsAvailable else { return }
-        sendHandEvent(at: point, subtype: gsEventSubtypeMove, fingerId: fingerId)
+        guard canSimulateTouches, let ev = fingerEvent(at: point, touch: true, range: true) else { return }
+        post(ev)
     }
 
     func touchUp(at point: CGPoint, fingerId: Int32 = 0) {
-        guard gsAvailable else { return }
-        sendHandEvent(at: point, subtype: gsEventSubtypeUp, fingerId: fingerId)
+        guard canSimulateTouches, let ev = fingerEvent(at: point, touch: false, range: false) else { return }
+        post(ev)
     }
 
     func tap(at point: CGPoint) {
-        guard gsAvailable else { return }
+        guard canSimulateTouches else { return }
         touchDown(at: point)
-        usleep(50000)
+        usleep(60000)
         touchUp(at: point)
     }
 
     func longPress(at point: CGPoint, duration: TimeInterval) {
-        guard gsAvailable else { return }
+        guard canSimulateTouches else { return }
         touchDown(at: point)
         usleep(UInt32(duration * 1_000_000))
         touchUp(at: point)
     }
 
     func swipe(from start: CGPoint, to end: CGPoint, duration: TimeInterval) {
-        guard gsAvailable else { return }
+        guard canSimulateTouches else { return }
         let steps = max(5, Int(duration * 60))
-        let stepDelay = useconds_t(duration / Double(steps) * 1_000_000)
-
+        let step = useconds_t(duration / Double(steps) * 1_000_000)
         touchDown(at: start)
         for i in 1...steps {
-            usleep(stepDelay)
+            usleep(step)
             let t = Double(i) / Double(steps)
             let x = start.x + (end.x - start.x) * t
             let y = start.y + (end.y - start.y) * t
             touchMove(to: CGPoint(x: x, y: y))
         }
-        usleep(30000)
+        usleep(40000)
         touchUp(at: end)
-    }
-
-    private func sendHandEvent(at point: CGPoint, subtype: UInt32, fingerId: Int32) {
-        guard let sendEvent = gsSendEvent, let createPort = gsCreatePurplePort else { return }
-
-        let port = createPort()
-        var record = GSEventRecord()
-        record.type = kGSHandEvent
-        record.subtype = subtype
-        record.location = point
-        record.windowLocation = point
-        record.pressure = (subtype == gsEventSubtypeUp) ? 0.0 : 1.0
-        record.info0 = fingerId
-
-        sendEvent(&record, port)
     }
 }
