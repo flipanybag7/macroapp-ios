@@ -1,0 +1,84 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  SCHEME: MacroApp
+  PROJECT: MacroApp.xcodeproj
+  CONFIGURATION: Release
+  EXPORT_OPTIONS_PLIST: exportOptions.plist
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Create export options plist
+        run: |
+          cat > exportOptions.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>development</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>teamID</key>
+              <string></string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Build archive
+        run: |
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -archivePath "build/MacroApp.xcarchive" \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            IPHONEOS_DEPLOYMENT_TARGET="15.0" \
+            -allowProvisioningUpdates \
+            | tee build.log
+
+      - name: Generate unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/MacroApp.xcarchive/Products/Applications/MacroApp.app Payload/
+          zip -r MacroApp.ipa Payload
+          rm -rf Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacroApp.ipa
+          path: MacroApp.ipa
+          retention-days: 30
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7

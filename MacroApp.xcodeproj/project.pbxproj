@@ -1,0 +1,27 @@
+{
+  "files" : [
+    "App.swift",
+    "ContentView.swift",
+    "Info.plist",
+    "Models\/MacroAction.swift",
+    "Models\/MacroFile.swift",
+    "Services\/TouchRecorder.swift",
+    "Services\/MacroPlayer.swift",
+    "Services\/LuaEngine.swift",
+    "Services\/LuaScriptGenerator.swift",
+    "Views\/RecordView.swift",
+    "Views\/MacroListView.swift",
+    "Views\/MacroPlaybackView.swift",
+    "Views\/LuaEditorView.swift",
+    "Views\/LuaPreviewView.swift"
+  ],
+  "info" : "Created by MacroApp",
+  "targets" : [
+    {
+      "deploymentTarget" : "16.0",
+      "displayName" : "MacroApp",
+      "type" : "app"
+    }
+  ],
+  "version" : 1
+}
