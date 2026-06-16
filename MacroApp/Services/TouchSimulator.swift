@@ -18,12 +18,28 @@ final class TouchSimulator {
     }
 
     private func setup() {
-        guard !helperBinaryB64.isEmpty,
-              let data = Data(base64Encoded: helperBinaryB64) else { return }
-        try? data.write(to: URL(fileURLWithPath: path))
-        _ = spawn("/var/jb/usr/bin/chmod", "755", path)
+        print("🟡 setup() called, helperBinaryB64 length: \(helperBinaryB64.count)")
+        guard !helperBinaryB64.isEmpty else {
+            print("🔴 helperBinaryB64 is empty!")
+            return
+        }
+        guard let data = Data(base64Encoded: helperBinaryB64) else {
+            print("🔴 base64 decode failed!")
+            return
+        }
+        print("🟡 decoded \(data.count) bytes")
+        do {
+            try data.write(to: URL(fileURLWithPath: path))
+            print("🟡 wrote \(data.count) bytes to \(path)")
+        } catch {
+            print("🔴 write failed: \(error)")
+            return
+        }
+        let r1 = spawn("/var/jb/usr/bin/chmod", "755", path)
+        print("🟡 chmod result: \(r1)")
         ready = access(path, X_OK) == 0
         canSimulateTouches = ready
+        print("🟡 ready=\(ready) canSimulateTouches=\(canSimulateTouches)")
     }
 
     @discardableResult
