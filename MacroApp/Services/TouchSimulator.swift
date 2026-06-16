@@ -4,7 +4,7 @@ import Darwin
 
 typealias IOHIDRef = UnsafeMutableRawPointer
 
-private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef
+private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef?
 private typealias DispatchC = @convention(c) (IOHIDRef, IOHIDRef) -> Void
 private typealias AppendC = @convention(c) (IOHIDRef, IOHIDRef) -> Void
 private typealias CreateFingerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef
