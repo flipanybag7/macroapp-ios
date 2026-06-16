@@ -50,9 +50,9 @@ final class TouchSimulator {
         return _posix_spawn(&pid, p, nil, nil, &argv, nil)
     }
 
-    func touchDown(at point: CGPoint, fingerId: Int32 = 0) { spawn("/var/jb/usr/bin/sudo", path, "0", "\(point.x)", "\(point.y)", "\(fingerId)") }
-    func touchMove(to point: CGPoint, fingerId: Int32 = 0) { spawn("/var/jb/usr/bin/sudo", path, "1", "\(point.x)", "\(point.y)", "\(fingerId)") }
-    func touchUp(at point: CGPoint, fingerId: Int32 = 0) { spawn("/var/jb/usr/bin/sudo", path, "2", "\(point.x)", "\(point.y)", "\(fingerId)") }
+    func touchDown(at point: CGPoint, fingerId: Int32 = 0) { spawn(path, "0", "\(point.x)", "\(point.y)", "\(fingerId)") }
+    func touchMove(to point: CGPoint, fingerId: Int32 = 0) { spawn(path, "1", "\(point.x)", "\(point.y)", "\(fingerId)") }
+    func touchUp(at point: CGPoint, fingerId: Int32 = 0) { spawn(path, "2", "\(point.x)", "\(point.y)", "\(fingerId)") }
 
     func tap(at: CGPoint) { touchDown(at: at); usleep(60000); touchUp(at: at) }
     func longPress(at: CGPoint, duration: TimeInterval) { touchDown(at: at); usleep(UInt32(duration*1_000_000)); touchUp(at: at) }
