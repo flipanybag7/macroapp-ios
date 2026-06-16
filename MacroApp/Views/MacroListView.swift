@@ -176,7 +176,7 @@ struct MacroListView: View {
         guard let text = UIPasteboard.general.string else { return }
         let actions = LuaEngine.shared.parseScript(text)
         if !actions.isEmpty {
-            var macro = MacroFile(name: "Imported Macro", actions: actions)
+            let macro = MacroFile(name: "Imported Macro", actions: actions)
             try? MacroFileStore.save(macro)
             refreshMacros()
         }

@@ -95,7 +95,7 @@ enum LuaScriptGenerator {
                 continue
             }
 
-            guard let fingerId = scanner.scanInt(),
+            guard let _ = scanner.scanInt(),
                   scanner.scanString(",") != nil,
                   let x = scanner.scanDouble(),
                   scanner.scanString(",") != nil,

@@ -5,19 +5,19 @@ struct MacroPlaybackView: View {
     @StateObject private var player = MacroPlayer()
     @State private var highlightIndex: Int = -1
     @State private var showLua = false
+    @State private var touchAnimating = false
+    @State private var tapPosition: CGPoint?
+    @State private var animationWorkItem: DispatchWorkItem?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationView {
-            ZStack {
-                Color.black.ignoresSafeArea()
-
-                VStack(spacing: 0) {
-                    canvasArea
-                    playbackControls
-                    actionList
-                }
+            VStack(spacing: 0) {
+                canvasArea
+                playbackControls
+                actionList
             }
+            .background(Color.black.ignoresSafeArea())
             .navigationTitle(macro.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -35,82 +35,109 @@ struct MacroPlaybackView: View {
             }
             .onDisappear {
                 player.stop()
+                animationWorkItem?.cancel()
             }
         }
         .navigationViewStyle(.stack)
     }
 
     private var canvasArea: some View {
-        ZStack {
-            Color(white: 0.08)
+        GeometryReader { geo in
+            ZStack {
+                Color(white: 0.08)
 
-            VStack(spacing: 16) {
-                if player.state == .idle {
-                    Image(systemName: "play.rectangle.fill")
-                        .font(.system(size: 40))
-                        .foregroundColor(.gray)
-
-                    Text("\(macro.actionCount) actions · \(String(format: "%.1f", macro.duration))s")
-                        .font(.title3)
-                        .foregroundColor(.white)
-
-                    Text("Press play to replay this macro")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                }
-
-                if player.state == .playing || player.state == .paused {
-                    VStack(spacing: 12) {
-                        Text(player.state == .playing ? "Playing..." : "Paused")
-                            .font(.headline)
-                            .foregroundColor(player.state == .playing ? .green : .orange)
-
-                        ProgressView(value: player.progress)
-                            .tint(.green)
-                            .padding(.horizontal, 40)
-
-                        Text("\(player.currentActionIndex + 1) / \(macro.actionCount)")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                    }
-                }
-
-                if player.state == .completed {
-                    VStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
+                VStack(spacing: 16) {
+                    if player.state == .idle {
+                        Image(systemName: "play.rectangle.fill")
                             .font(.system(size: 40))
-                            .foregroundColor(.green)
-                        Text("Done!")
+                            .foregroundColor(.gray)
+
+                        Text("\(macro.actionCount) actions")
                             .font(.title3)
-                            .foregroundColor(.green)
+                            .foregroundColor(.white)
+
+                        Text("\(String(format: "%.1f", macro.duration))s total")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+
+                        if macro.actionCount > 0 {
+                            Text("Press play to replay this macro")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                                .padding(.top, 4)
+                        }
+                    }
+
+                    if player.state == .playing || player.state == .paused {
+                        VStack(spacing: 12) {
+                            Text(player.state == .playing ? "Playing..." : "Paused")
+                                .font(.headline)
+                                .foregroundColor(player.state == .playing ? .green : .orange)
+
+                            ProgressView(value: player.progress)
+                                .tint(.green)
+                                .padding(.horizontal, 40)
+
+                            Text("\(player.currentActionIndex + 1) / \(macro.actionCount)")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    }
+
+                    if player.state == .completed {
+                        VStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 40))
+                                .foregroundColor(.green)
+                            Text("Done!")
+                                .font(.title3)
+                                .foregroundColor(.green)
+                        }
                     }
                 }
-            }
 
-            ForEach(Array(macro.actions.enumerated()), id: \.offset) { index, action in
-                if let point = action.startPoint {
+                ForEach(Array(macro.actions.enumerated()), id: \.offset) { index, action in
+                    if let point = action.startPoint {
+                        Circle()
+                            .fill(actionDotColor(action.type, index: index))
+                            .frame(width: 12, height: 12)
+                            .position(scalePoint(point, to: geo.size))
+                            .opacity(highlightIndex == index ? 1 : 0.3)
+                            .animation(.easeInOut(duration: 0.2), value: highlightIndex)
+                            .allowsHitTesting(false)
+                    }
+
+                    if action.type == .swipe, let start = action.startPoint, let end = action.endPoint {
+                        Path { path in
+                            path.move(to: scalePoint(start, to: geo.size))
+                            path.addLine(to: scalePoint(end, to: geo.size))
+                        }
+                        .stroke(
+                            highlightIndex == index ? Color.orange : Color.orange.opacity(0.2),
+                            style: StrokeStyle(lineWidth: highlightIndex == index ? 2 : 1, dash: [6, 4])
+                        )
+                        .allowsHitTesting(false)
+                    }
+                }
+
+                if let pos = tapPosition {
                     Circle()
-                        .fill(actionDotColor(action.type, index: index))
-                        .frame(width: 12, height: 12)
-                        .position(point)
-                        .opacity(highlightIndex == index ? 1 : 0.3)
-                        .animation(.easeInOut(duration: 0.2), value: highlightIndex)
+                        .fill(Color.green)
+                        .frame(width: 30, height: 30)
+                        .position(pos)
+                        .opacity(touchAnimating ? 0.8 : 0)
+                        .scaleEffect(touchAnimating ? 1.3 : 1.0)
+                        .animation(.easeOut(duration: 0.2), value: touchAnimating)
                         .allowsHitTesting(false)
                 }
             }
-
-            if highlightIndex >= 0 && highlightIndex < macro.actions.count,
-               let start = macro.actions[highlightIndex].startPoint,
-               let end = macro.actions[highlightIndex].endPoint,
-               macro.actions[highlightIndex].type == .swipe {
-                Path { path in
-                    path.move(to: start)
-                    path.addLine(to: end)
-                }
-                .stroke(Color.orange, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
-                .allowsHitTesting(false)
-            }
         }
+    }
+
+    private func scalePoint(_ point: CGPoint, to size: CGSize) -> CGPoint {
+        let scaleX = size.width / macro.screenSize.width
+        let scaleY = size.height / macro.screenSize.height
+        return CGPoint(x: point.x * scaleX, y: point.y * scaleY)
     }
 
     private func actionDotColor(_ type: MacroActionType, index: Int) -> Color {
@@ -145,7 +172,6 @@ struct MacroPlaybackView: View {
                         Image(systemName: playbackIcon)
                             .font(.title3)
                         Text(playbackLabel)
-                            .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -154,7 +180,7 @@ struct MacroPlaybackView: View {
                     .cornerRadius(12)
                 }
 
-                Button(action: { }) {
+                Button(action: { loopPlayback() }) {
                     HStack(spacing: 4) {
                         Image(systemName: "repeat")
                         Text("Loop")
@@ -191,32 +217,38 @@ struct MacroPlaybackView: View {
 
     private var actionList: some View {
         List {
-            ForEach(Array(macro.actions.enumerated()), id: \.offset) { index, action in
-                HStack {
-                    Image(systemName: actionIcon(action.type))
-                        .foregroundColor(actionListDotColor(action.type))
-                        .frame(width: 24)
+            if macro.actions.isEmpty {
+                Text("No actions recorded")
+                    .foregroundColor(.gray)
+                    .listRowBackground(Color(white: 0.1))
+            } else {
+                ForEach(Array(macro.actions.enumerated()), id: \.offset) { index, action in
+                    HStack {
+                        Image(systemName: actionIcon(action.type))
+                            .foregroundColor(actionListDotColor(action.type))
+                            .frame(width: 24)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(actionTypeLabel(action))
-                            .font(.subheadline)
-                            .foregroundColor(.white)
-                        Text(String(format: "Delay: %.2fs", action.delay))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(actionTypeLabel(action))
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                            Text(String(format: "Delay: %.2fs", action.delay))
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+
+                        Spacer()
+
+                        Text("#\(index + 1)")
                             .font(.caption)
                             .foregroundColor(.gray)
                     }
-
-                    Spacer()
-
-                    Text("#\(index + 1)")
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                    .listRowBackground(
+                        highlightIndex == index
+                            ? Color.green.opacity(0.15)
+                            : Color(white: 0.1)
+                    )
                 }
-                .listRowBackground(
-                    highlightIndex == index
-                        ? Color.green.opacity(0.15)
-                        : Color(white: 0.1)
-                )
             }
         }
         .listStyle(.plain)
@@ -303,11 +335,30 @@ struct MacroPlaybackView: View {
 
     private func playFromStart() {
         highlightIndex = -1
+        animationWorkItem?.cancel()
+        touchAnimating = false
         player.loadActions(macro.actions)
-        player.play { _, index in
+        player.play { action, index in
             withAnimation {
                 highlightIndex = index
             }
+            if let point = action.startPoint {
+                withAnimation {
+                    tapPosition = point
+                    touchAnimating = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation {
+                        touchAnimating = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func loopPlayback() {
+        if player.state == .completed || player.state == .idle {
+            playFromStart()
         }
     }
 

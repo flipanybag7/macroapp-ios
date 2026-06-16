@@ -10,6 +10,8 @@ struct RecordView: View {
     @State private var highlightActionId: UUID?
     @State private var showLuaPreview = false
     @State private var gestureActive = false
+    @State private var playbackTouchPos: CGPoint?
+    @State private var playbackTouchVisible = false
 
     var body: some View {
         ZStack {
@@ -125,6 +127,15 @@ struct RecordView: View {
                             .position(point)
                             .allowsHitTesting(false)
                     }
+                }
+
+                if let pos = playbackTouchPos, playbackTouchVisible {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 36, height: 36)
+                        .position(pos)
+                        .opacity(0.9)
+                        .allowsHitTesting(false)
                 }
             }
         }
@@ -372,6 +383,13 @@ struct RecordView: View {
                 withAnimation {
                     highlightActionId = action.id
                 }
+                if let point = action.startPoint {
+                    playbackTouchPos = point
+                    playbackTouchVisible = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        playbackTouchVisible = false
+                    }
+                }
             }
         case .playing:
             player.pause()
@@ -388,7 +406,7 @@ struct RecordView: View {
 
     private func saveMacro() {
         let name = macroName.isEmpty ? "Untitled Macro" : macroName
-        var macro = MacroFile(name: name, actions: recordedActions)
+        let macro = MacroFile(name: name, actions: recordedActions)
         try? MacroFileStore.save(macro)
         macroName = ""
     }
