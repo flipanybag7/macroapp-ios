@@ -28,19 +28,17 @@ final class TouchSimulator {
 
     private func setup() {
         guard !helperBinary.isEmpty else { return }
-        if access(path, X_OK) != 0 {
-            let data = Data(helperBinary)
-            try? data.write(to: URL(fileURLWithPath: path))
-            spawn("/var/jb/usr/bin/chmod", ["755", path])
-            spawn("/var/jb/usr/bin/ldid", ["-S", path])
-        }
+        let data = Data(helperBinary)
+        try? data.write(to: URL(fileURLWithPath: path))
+        _ = spawn("/var/jb/usr/bin/chmod", ["755", path])
+        _ = spawn("/var/jb/usr/bin/ldid", ["-S", path])
         ready = access(path, X_OK) == 0
         canSimulateTouches = ready
     }
 
     private func run(_ args: String...) {
         guard ready else { return }
-        spawn("/var/jb/usr/bin/sudo", [path] + args)
+        _ = spawn(path, args)
     }
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) { run("0", "\(point.x)", "\(point.y)", "\(fingerId)") }
