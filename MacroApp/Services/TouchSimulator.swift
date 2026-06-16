@@ -1,6 +1,9 @@
 import Foundation
 import Darwin
 
+@_silgen_name("posix_spawn")
+func _posix_spawn(_ pid: UnsafeMutablePointer<pid_t>?, _ path: UnsafePointer<CChar>, _ fileActions: UnsafeMutablePointer<posix_spawn_file_actions_t>?, _ attrp: UnsafeMutablePointer<posix_spawnattr_t>?, _ argv: UnsafePointer<UnsafeMutablePointer<CChar>?>?, _ envp: UnsafePointer<UnsafeMutablePointer<CChar>?>?) -> Int32
+
 final class TouchSimulator {
     static let shared = TouchSimulator()
 
@@ -41,8 +44,8 @@ final class TouchSimulator {
             try? FileManager.default.removeItem(atPath: "/tmp/touch_helper")
             do {
                 try FileManager.default.copyItem(at: bundled, to: URL(fileURLWithPath: "/tmp/touch_helper"))
-                runCmd("/var/jb/usr/bin/chmod", "755", "/tmp/touch_helper")
-                runCmd("/var/jb/usr/bin/ldid", "-S", "/tmp/touch_helper")
+                spawn("/var/jb/usr/bin/chmod", ["755", "/tmp/touch_helper"])
+                spawn("/var/jb/usr/bin/ldid", ["-S", "/tmp/touch_helper"])
                 helperReady = true
                 canSimulateTouches = true
                 return
@@ -58,23 +61,19 @@ final class TouchSimulator {
         }
     }
 
-    private func runCmd(_ cmd: String, _ args: String...) {
-        let p = Process()
-        p.launchPath = cmd
-        p.arguments = args.isEmpty ? nil : args
-        p.launch()
-        p.waitUntilExit()
+    private func spawn(_ launchPath: String, _ args: [String]) -> Int32 {
+        var pid: pid_t = 0
+        let cargs = ([launchPath] + args).map { strdup($0) }
+        defer { cargs.forEach { free($0) } }
+        var argv = cargs + [nil]
+        return _posix_spawn(&pid, launchPath, nil, nil, argv, nil)
     }
 
     @discardableResult
     private func run(_ args: String...) -> Bool {
         guard helperReady else { return false }
-        let p = Process()
-        p.launchPath = "/var/jb/usr/bin/sudo"
-        p.arguments = [helperPath] + args
-        p.launch()
-        p.waitUntilExit()
-        return p.terminationStatus == 0
+        let ret = spawn("/var/jb/usr/bin/sudo", [helperPath] + args)
+        return ret == 0
     }
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) {
