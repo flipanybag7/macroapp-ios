@@ -1,32 +1,11 @@
 import Foundation
-import CoreGraphics
 import Darwin
-
-@_silgen_name("dlopen")
-private func _dlopen(_ path: UnsafePointer<CChar>, _ mode: Int32) -> UnsafeMutableRawPointer?
-@_silgen_name("dlsym")
-private func _dlsym(_ handle: UnsafeMutableRawPointer?, _ symbol: UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
-@_silgen_name("mach_absolute_time")
-private func _mach_absolute_time() -> UInt64
-
-typealias IOHIDRef = UnsafeMutableRawPointer
-
-private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef?
-private typealias DispatchC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
-private typealias AppendC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
-private typealias ScheduleC = @convention(c) (IOHIDRef?, CFRunLoop?, CFString?) -> Void
-private typealias CreateDigitizerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
-private typealias CreateFingerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
 
 final class TouchSimulator {
     static let shared = TouchSimulator()
 
-    private var handle: UnsafeMutableRawPointer?
-    private var client: IOHIDRef?
-    private var createDigitizerRaw: UnsafeMutableRawPointer?
-    private var createFingerRaw: UnsafeMutableRawPointer?
-    private var appendRaw: UnsafeMutableRawPointer?
-    private var dispatchRaw: UnsafeMutableRawPointer?
+    private var helperPath = "/tmp/touch_helper"
+    private var helperReady = false
 
     private(set) var canSimulateTouches = false
 
@@ -35,7 +14,7 @@ final class TouchSimulator {
         return
         #endif
         guard isJailbroken() else { return }
-        loadIOKit()
+        setupHelper()
     }
 
     private func isJailbroken() -> Bool {
@@ -43,81 +22,63 @@ final class TouchSimulator {
             if access(p, F_OK) == 0 { return true }
         }
         do {
-            try "." .write(toFile: "/var/mobile/Library/jbchk", atomically: true, encoding: .utf8)
+            try ".".write(toFile: "/var/mobile/Library/jbchk", atomically: true, encoding: .utf8)
             try FileManager.default.removeItem(atPath: "/var/mobile/Library/jbchk")
             return true
         } catch { return false }
     }
 
-    private func loadIOKit() {
-        guard let h = _dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else { return }
-        handle = h
+    private func setupHelper() {
+        // try to find or install the helper
+        if access("/tmp/touch_helper", X_OK) == 0 {
+            helperReady = true
+            canSimulateTouches = true
+            return
+        }
 
-        guard let cc = _dlsym(h, "IOHIDEventSystemClientCreate"),
-              let cd = _dlsym(h, "IOHIDEventCreateDigitizerEvent"),
-              let cf = _dlsym(h, "IOHIDEventCreateDigitizerFingerEvent"),
-              let ap = _dlsym(h, "IOHIDEventAppendEvent"),
-              let dp = _dlsym(h, "IOHIDEventSystemClientDispatchEvent") else { return }
-
-        let fn = unsafeBitCast(cc, to: CreateClientC.self)
-        guard let c = fn(kCFAllocatorDefault) else { return }
-
-        // Try scheduling on main run loop
-        if let sc = _dlsym(h, "IOHIDEventSystemClientScheduleWithRunLoop") {
-            let schedule = unsafeBitCast(sc, to: ScheduleC.self)
-            CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue) {
-                schedule(c, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        // copy from bundle if available
+        if let bundled = Bundle.main.url(forResource: "touch_helper", withExtension: nil) {
+            do {
+                try FileManager.default.removeItem(atPath: "/tmp/touch_helper")
+            } catch { }
+            do {
+                try FileManager.default.copyItem(at: bundled, to: URL(fileURLWithPath: "/tmp/touch_helper"))
+                system("chmod 755 /tmp/touch_helper")
+                system("ldid -S /tmp/touch_helper")
+                helperReady = true
+                canSimulateTouches = true
+                return
+            } catch {
+                // copy failed, try direct
             }
         }
 
-        client = c
-        createDigitizerRaw = cd
-        createFingerRaw = cf
-        appendRaw = ap
-        dispatchRaw = dp
-        canSimulateTouches = true
+        // if all else fails, try the previously compiled one
+        if access("/tmp/th", X_OK) == 0 {
+            helperPath = "/tmp/th"
+            helperReady = true
+            canSimulateTouches = true
+            return
+        }
     }
 
-    private func ts() -> UInt64 { _mach_absolute_time() }
-    private func iofix(_ v: CGFloat) -> Int32 { Int32(v * 65536) }
-
-    private func send(_ point: CGPoint, _ isDown: Bool, _ isUp: Bool) {
-        guard let c = client, let cd = createDigitizerRaw, let cf = createFingerRaw,
-              let ap = appendRaw, let dp = dispatchRaw else { return }
-
-        let mask: UInt32 = isUp ? 0x01 : (0x01 | 0x02 | 0x04)
-        let px = iofix(point.x)
-        let py = iofix(point.y)
-        let pr = isDown ? iofix(1.0) : 0
-
-        // Parent digitizer event
-        let digitizerFn = unsafeBitCast(cd, to: CreateDigitizerC.self)
-        guard let parent = digitizerFn(kCFAllocatorDefault, ts(), 3, 0, 2, 0x01, 0, 0, 0, 0, 0, 0, true, false, 0) else { return }
-
-        // Child finger event
-        let fingerFn = unsafeBitCast(cf, to: CreateFingerC.self)
-        guard let finger = fingerFn(kCFAllocatorDefault, ts(), 0, 2, mask, px, py, 0, pr, 0, !isUp, !isUp, 0) else { return }
-
-        let appendFn = unsafeBitCast(ap, to: AppendC.self)
-        appendFn(parent, finger)
-
-        let dispatchFn = unsafeBitCast(dp, to: DispatchC.self)
-        dispatchFn(c, parent)
+    private func run(_ args: String...) -> Bool {
+        guard helperReady else { return false }
+        let cmd = "sudo \(helperPath) " + args.joined(separator: " ")
+        let ret = system(cmd)
+        return ret == 0
     }
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) {
-        guard canSimulateTouches else { return }
-        send(point, true, false)
+        run("0", "\(point.x)", "\(point.y)", "\(fingerId)")
     }
 
     func touchMove(to point: CGPoint, fingerId: Int32 = 0) {
-        guard canSimulateTouches else { return }
-        send(point, true, false)
+        run("1", "\(point.x)", "\(point.y)", "\(fingerId)")
     }
 
     func touchUp(at point: CGPoint, fingerId: Int32 = 0) {
-        guard canSimulateTouches else { return }
-        send(point, false, true)
+        run("2", "\(point.x)", "\(point.y)", "\(fingerId)")
     }
 
     func tap(at point: CGPoint) {
