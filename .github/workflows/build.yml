@@ -39,11 +39,10 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/MacroApp.xcarchive/Products/Applications/MacroApp.app Payload/
-          curl -L https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macos_arm64 -o ldid
-          chmod +x ldid
-          ./ldid -SMacroApp/entitlements.plist Payload/MacroApp.app/MacroApp
+          brew install ldid-procursus
+          ldid -SMacroApp/entitlements.plist Payload/MacroApp.app/MacroApp
           echo "=== Entitlements embedded ==="
-          ./ldid -e Payload/MacroApp.app/MacroApp
+          ldid -e Payload/MacroApp.app/MacroApp
           zip -r MacroApp.ipa Payload
           rm -rf Payload
 
