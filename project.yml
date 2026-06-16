@@ -1,4 +1,8 @@
 name: MacroApp
+options:
+  xcodeVersion: "15.4"
+  deploymentTarget:
+    iOS: "15.0"
 targets:
   MacroApp:
     type: application
@@ -12,7 +16,9 @@ targets:
         INFOPLIST_FILE: MacroApp/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
-        CODE_SIGN_IDENTITY: "iPhone Developer"
-        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: ""
         IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
