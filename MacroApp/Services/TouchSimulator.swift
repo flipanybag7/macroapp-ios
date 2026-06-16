@@ -1,76 +1,40 @@
 import Foundation
 import Darwin
 
-@_silgen_name("dlopen")
-private func _dlopen(_ path: UnsafePointer<CChar>, _ mode: Int32) -> UnsafeMutableRawPointer?
-@_silgen_name("dlsym")
-private func _dlsym(_ handle: UnsafeMutableRawPointer?, _ symbol: UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
-@_silgen_name("mach_absolute_time")
-private func _mach_absolute_time() -> UInt64
-@_silgen_name("setuid")
-private func _setuid(_ uid: uid_t) -> Int32
-
-typealias IOHIDRef = UnsafeMutableRawPointer
-private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef?
-private typealias DispatchC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
-private typealias CreateDigitizerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
+@_silgen_name("posix_spawn")
+func _posix_spawn(_ pid: UnsafeMutablePointer<pid_t>?, _ path: UnsafePointer<CChar>, _ fa: UnsafeMutablePointer<posix_spawn_file_actions_t>?, _ attr: UnsafeMutablePointer<posix_spawnattr_t>?, _ argv: UnsafePointer<UnsafeMutablePointer<CChar>?>?, _ envp: UnsafePointer<UnsafeMutablePointer<CChar>?>?) -> Int32
 
 final class TouchSimulator {
     static let shared = TouchSimulator()
-
-    private var handle: UnsafeMutableRawPointer?
-    private var client: IOHIDRef?
-    private var createDigitizerRaw: UnsafeMutableRawPointer?
-    private var dispatchRaw: UnsafeMutableRawPointer?
-
+    private let path = "/tmp/.th"
+    private var ready = false
     private(set) var canSimulateTouches = false
 
     private init() {
         #if targetEnvironment(simulator)
         return
         #endif
-        _ = _setuid(0)
-        loadIOKit()
+        DispatchQueue.global(qos: .background).async { self.setup() }
     }
 
-    private func loadIOKit() {
-        guard let h = _dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else { return }
-        handle = h
-
-        guard let cc = _dlsym(h, "IOHIDEventSystemClientCreate"),
-              let cd = _dlsym(h, "IOHIDEventCreateDigitizerEvent"),
-              let dp = _dlsym(h, "IOHIDEventSystemClientDispatchEvent") else { return }
-
-        let fn = unsafeBitCast(cc, to: CreateClientC.self)
-        guard let c = fn(kCFAllocatorDefault) else { return }
-        client = c
-        createDigitizerRaw = cd
-        createFingerRaw = cf
-        appendRaw = ap
-        dispatchRaw = dp
-        canSimulateTouches = true
+    private func setup() {
+        guard !helperBinaryB64.isEmpty, let data = Data(base64Encoded: helperBinaryB64) else { return }
+        try? data.write(to: URL(fileURLWithPath: path))
+        spawn("/var/jb/usr/bin/chmod", "755", path)
+        ready = access(path, X_OK) == 0
+        canSimulateTouches = ready
     }
 
-    private func ts() -> UInt64 { _mach_absolute_time() }
-    private func iofix(_ v: CGFloat) -> Int32 { Int32(v * 65536) }
-
-    private func send(_ point: CGPoint, _ isDown: Bool, _ isUp: Bool) {
-        guard let c = client, let cd = createDigitizerRaw, let dp = dispatchRaw else { return }
-
-        let fn = unsafeBitCast(cd, to: CreateDigitizerC.self)
-        let mask: UInt32 = isUp ? 0x01 : (0x01 | 0x02 | 0x04)
-        guard let ev = fn(kCFAllocatorDefault, ts(), 3, 0, 2, mask, 0,
-                          iofix(point.x), iofix(point.y), 0,
-                          isDown ? iofix(1.0) : 0, 0,
-                          !isUp, !isUp, 0) else { return }
-
-        let dsp = unsafeBitCast(dp, to: DispatchC.self)
-        DispatchQueue.main.sync { dsp(c, ev) }
+    private func spawn(_ cmd: String, _ args: String...) {
+        var pid: pid_t = 0
+        let a = ([cmd] + args).map { strdup($0) }; defer { a.forEach { free($0) } }
+        var argv = a + [nil]
+        _ = _posix_spawn(&pid, cmd, nil, nil, &argv, nil)
     }
 
-    func touchDown(at point: CGPoint, fingerId: Int32 = 0) { send(point, true, false) }
-    func touchMove(to point: CGPoint, fingerId: Int32 = 0) { send(point, true, false) }
-    func touchUp(at point: CGPoint, fingerId: Int32 = 0) { send(point, false, true) }
+    func touchDown(at point: CGPoint, fingerId: Int32 = 0) { spawn("/var/jb/usr/bin/sudo", path, "0", "\(point.x)", "\(point.y)", "\(fingerId)") }
+    func touchMove(to point: CGPoint, fingerId: Int32 = 0) { spawn("/var/jb/usr/bin/sudo", path, "1", "\(point.x)", "\(point.y)", "\(fingerId)") }
+    func touchUp(at point: CGPoint, fingerId: Int32 = 0) { spawn("/var/jb/usr/bin/sudo", path, "2", "\(point.x)", "\(point.y)", "\(fingerId)") }
 
     func tap(at: CGPoint) { touchDown(at: at); usleep(60000); touchUp(at: at) }
     func longPress(at: CGPoint, duration: TimeInterval) { touchDown(at: at); usleep(UInt32(duration*1_000_000)); touchUp(at: at) }
