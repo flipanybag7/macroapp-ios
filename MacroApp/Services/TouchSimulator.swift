@@ -7,7 +7,7 @@ func _posix_spawn(_ pid: UnsafeMutablePointer<pid_t>?, _ path: UnsafePointer<CCh
 final class TouchSimulator {
     static let shared = TouchSimulator()
 
-    private var helperPath = "/tmp/touch_helper"
+    private let helperPath = "/tmp/touch_helper"
     private var helperReady = false
 
     private(set) var canSimulateTouches = false
@@ -16,77 +16,91 @@ final class TouchSimulator {
         #if targetEnvironment(simulator)
         return
         #endif
-        // Try jailbreak detection and helper setup, regardless
-        if !isJailbroken() {
-            // still try - maybe detection failed but helper works
-        }
-        setupHelper()
+        DispatchQueue.global(qos: .background).async { self.trySetup() }
     }
 
-    private func isJailbroken() -> Bool {
-        if access("/var/jb/usr/bin/sudo", X_OK) == 0 { return true }
-        if access("/var/jb", F_OK) == 0 { return true }
-        if access("/private/preboot/jb", F_OK) == 0 { return true }
-        if access("/Applications/Cydia.app", F_OK) == 0 { return true }
-        return false
-    }
-
-    private func setupHelper() {
-        // try to find or install the helper
-        if access("/tmp/touch_helper", X_OK) == 0 {
+    private func trySetup() {
+        // Already exists?
+        if access(helperPath, X_OK) == 0 {
             helperReady = true
             canSimulateTouches = true
             return
         }
-
-        // copy from bundle if available
-        if let bundled = Bundle.main.url(forResource: "touch_helper", withExtension: nil) {
-            try? FileManager.default.removeItem(atPath: "/tmp/touch_helper")
-            do {
-                try FileManager.default.copyItem(at: bundled, to: URL(fileURLWithPath: "/tmp/touch_helper"))
-                spawn("/var/jb/usr/bin/chmod", ["755", "/tmp/touch_helper"])
-                spawn("/var/jb/usr/bin/ldid", ["-S", "/tmp/touch_helper"])
-                helperReady = true
-                canSimulateTouches = true
-                return
-            } catch { }
-        }
-
-        // if all else fails, try the previously compiled one
+        // Use fallback from earlier compile
         if access("/tmp/th", X_OK) == 0 {
-            helperPath = "/tmp/th"
             helperReady = true
             canSimulateTouches = true
+            _helperPath = "/tmp/th"
             return
+        }
+        // Try to copy from bundle, and if that fails, compile on-device
+        if compileHelper() {
+            helperReady = true
+            canSimulateTouches = true
         }
     }
 
-    private func spawn(_ launchPath: String, _ args: [String]) -> Int32 {
+    private var _helperPath = "/tmp/touch_helper"
+    private var effectivePath: String { _helperPath }
+
+    private func spawn(_ path: String, _ args: [String]) -> Int32 {
         var pid: pid_t = 0
-        let cargs = ([launchPath] + args).map { strdup($0) }
+        let cargs = ([path] + args).map { strdup($0) }
         defer { cargs.forEach { free($0) } }
-        var argv = cargs + [nil]
-        return _posix_spawn(&pid, launchPath, nil, nil, argv, nil)
+        let argv = cargs + [nil]
+        return _posix_spawn(&pid, path, nil, nil, argv, nil)
+    }
+
+    private func compileHelper() -> Bool {
+        let sdk = "/var/jb/usr/share/SDKs/iPhoneOS.sdk"
+        let src = "/tmp/th.c"
+
+        let code = """
+        #include <CoreFoundation/CoreFoundation.h>
+        #include <mach/mach_time.h>
+        #include <stdlib.h>
+        #include <unistd.h>
+        typedef void* IOHIDSystemRef; typedef void* IOHIDRef;
+        extern IOHIDSystemRef IOHIDEventSystemClientCreate(CFAllocatorRef);
+        extern IOHIDRef IOHIDEventCreateDigitizerFingerEvent(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int, int, uint32_t);
+        extern IOHIDRef IOHIDEventCreateDigitizerEvent(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int, int, uint32_t);
+        extern void IOHIDEventAppendEvent(IOHIDRef, IOHIDRef);
+        extern void IOHIDEventSystemClientDispatchEvent(IOHIDSystemRef, IOHIDRef);
+        int main(int c, char** v) { if(c!=5) return 1; int t=atoi(v[1]); float x=atof(v[2]),y=atof(v[3]); uint64_t mt=mach_absolute_time();
+        #define F(p) ((int32_t)((p)*65536))
+        IOHIDSystemRef cl=IOHIDEventSystemClientCreate(NULL); if(!cl) return 2;
+        IOHIDRef p=IOHIDEventCreateDigitizerEvent(NULL,mt,3,0,2,1,0,0,0,0,0,0,1,0,0);
+        IOHIDRef e=IOHIDEventCreateDigitizerFingerEvent(NULL,mt,0,2,(t==2?1:7),F(x),F(y),0,F(t==2?0:1),0,t!=2,t!=2,0);
+        IOHIDEventAppendEvent(p,e); IOHIDEventSystemClientDispatchEvent(cl,p); CFRelease(e);CFRelease(p);CFRelease(cl); return 0; }
+        """
+
+        try? code.write(toFile: src, atomically: true, encoding: .utf8)
+
+        let clangPath = "/var/jb/usr/bin/clang"
+        guard access(clangPath, X_OK) == 0 else { return false }
+
+        try? FileManager.default.removeItem(atPath: helperPath)
+        let r1 = spawn(clangPath, ["-isysroot", sdk, "-framework", "IOKit", "-framework", "CoreFoundation", "-o", helperPath, src])
+        if r1 != 0 { return false }
+
+        let r2 = spawn("/var/jb/usr/bin/ldid", ["-S", helperPath])
+        if r2 != 0 {
+            // try without signing
+        }
+
+        return access(helperPath, X_OK) == 0
     }
 
     @discardableResult
     private func run(_ args: String...) -> Bool {
         guard helperReady else { return false }
-        let ret = spawn("/var/jb/usr/bin/sudo", [helperPath] + args)
+        let ret = spawn("/var/jb/usr/bin/sudo", [effectivePath] + args)
         return ret == 0
     }
 
-    func touchDown(at point: CGPoint, fingerId: Int32 = 0) {
-        run("0", "\(point.x)", "\(point.y)", "\(fingerId)")
-    }
-
-    func touchMove(to point: CGPoint, fingerId: Int32 = 0) {
-        run("1", "\(point.x)", "\(point.y)", "\(fingerId)")
-    }
-
-    func touchUp(at point: CGPoint, fingerId: Int32 = 0) {
-        run("2", "\(point.x)", "\(point.y)", "\(fingerId)")
-    }
+    func touchDown(at point: CGPoint, fingerId: Int32 = 0) { run("0", "\(point.x)", "\(point.y)", "\(fingerId)") }
+    func touchMove(to point: CGPoint, fingerId: Int32 = 0) { run("1", "\(point.x)", "\(point.y)", "\(fingerId)") }
+    func touchUp(at point: CGPoint, fingerId: Int32 = 0) { run("2", "\(point.x)", "\(point.y)", "\(fingerId)") }
 
     func tap(at point: CGPoint) {
         touchDown(at: point)
