@@ -38,19 +38,15 @@ final class TouchSimulator {
 
         // copy from bundle if available
         if let bundled = Bundle.main.url(forResource: "touch_helper", withExtension: nil) {
-            do {
-                try FileManager.default.removeItem(atPath: "/tmp/touch_helper")
-            } catch { }
+            try? FileManager.default.removeItem(atPath: "/tmp/touch_helper")
             do {
                 try FileManager.default.copyItem(at: bundled, to: URL(fileURLWithPath: "/tmp/touch_helper"))
-                system("chmod 755 /tmp/touch_helper")
-                system("ldid -S /tmp/touch_helper")
+                runCmd("/var/jb/usr/bin/chmod", "755", "/tmp/touch_helper")
+                runCmd("/var/jb/usr/bin/ldid", "-S", "/tmp/touch_helper")
                 helperReady = true
                 canSimulateTouches = true
                 return
-            } catch {
-                // copy failed, try direct
-            }
+            } catch { }
         }
 
         // if all else fails, try the previously compiled one
@@ -62,11 +58,23 @@ final class TouchSimulator {
         }
     }
 
+    private func runCmd(_ cmd: String, _ args: String...) {
+        let p = Process()
+        p.launchPath = cmd
+        p.arguments = args.isEmpty ? nil : args
+        p.launch()
+        p.waitUntilExit()
+    }
+
+    @discardableResult
     private func run(_ args: String...) -> Bool {
         guard helperReady else { return false }
-        let cmd = "sudo \(helperPath) " + args.joined(separator: " ")
-        let ret = system(cmd)
-        return ret == 0
+        let p = Process()
+        p.launchPath = "/var/jb/usr/bin/sudo"
+        p.arguments = [helperPath] + args
+        p.launch()
+        p.waitUntilExit()
+        return p.terminationStatus == 0
     }
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) {
