@@ -35,8 +35,8 @@ final class TouchSimulator {
             print("🔴 write failed: \(error)")
             return
         }
-        let r1 = spawn("/var/jb/usr/bin/chmod", "755", path)
-        print("🟡 chmod result: \(r1)")
+        let r1 = spawn("/var/jb/usr/bin/chmod", "4755", path)
+        print("🟡 chmod 4755 result: \(r1)")
         ready = access(path, X_OK) == 0
         canSimulateTouches = ready
         print("🟡 ready=\(ready) canSimulateTouches=\(canSimulateTouches)")
