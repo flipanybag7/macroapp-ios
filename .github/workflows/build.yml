@@ -45,7 +45,7 @@ jobs:
           CEOF
           clang -arch arm64 -isysroot /Applications/Xcode_15.4.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk -framework IOKit -framework CoreFoundation -o /tmp/th /tmp/th.c
           mkdir -p MacroApp/Resources
-          xxd -i /tmp/th | sed 's/unsigned char /let helperBytes: [UInt8] = [/; s/unsigned int.*/]/; s/_tmp_th/helperBinary/' > MacroApp/Resources/HelperBinary.swift
+          xxd -i /tmp/th | sed 's/unsigned char .*/let helperBinary: [UInt8] = [/; s/};/]/; /unsigned int/d' > MacroApp/Resources/HelperBinary.swift
           echo "// Auto-generated helper binary" | cat - MacroApp/Resources/HelperBinary.swift > /tmp/hb.swift && mv /tmp/hb.swift MacroApp/Resources/HelperBinary.swift
 
       - name: Generate Xcode project
