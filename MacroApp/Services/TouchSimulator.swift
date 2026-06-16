@@ -1,31 +1,17 @@
 import Foundation
-import CoreGraphics
-import Darwin
-
-typealias IOHIDRef = UnsafeMutableRawPointer
-
-private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef?
-private typealias DispatchC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
-private typealias ScheduleC = @convention(c) (IOHIDRef?, CFRunLoop?, CFString?) -> Void
-private typealias CreateDigitizerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
-
-@_silgen_name("dlopen")
-private func _dlopen(_ path: UnsafePointer<CChar>, _ mode: Int32) -> UnsafeMutableRawPointer?
-@_silgen_name("dlsym")
-private func _dlsym(_ handle: UnsafeMutableRawPointer?, _ symbol: UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
-@_silgen_name("mach_absolute_time")
-private func _mach_absolute_time() -> UInt64
+import Network
 
 final class TouchSimulator {
     static let shared = TouchSimulator()
 
-    private var handle: UnsafeMutableRawPointer?
-    private var client: IOHIDRef?
-    private var createDigitizerRaw: UnsafeMutableRawPointer?
-    private var dispatchRaw: UnsafeMutableRawPointer?
-    private var scheduleRaw: UnsafeMutableRawPointer?
-    private var eventQueue = DispatchQueue(label: "touchsim.hid", qos: .userInteractive)
-    private var queueInitialized = false
+    private var connection: NWConnection?
+    private var queue = DispatchQueue(label: "zxtouch.tcp")
+    private var isConnected = false
+    private var connectionReady = false
+    private var pending: [Data] = []
+
+    private let port: UInt16 = 6000
+    private let taskTouch: Int = 10
 
     private(set) var canSimulateTouches = false
 
@@ -33,101 +19,69 @@ final class TouchSimulator {
         #if targetEnvironment(simulator)
         return
         #endif
-        guard isJailbroken() else { return }
-        setupEventQueue()
+        connect()
     }
 
-    private func isJailbroken() -> Bool {
-        for p in ["/Applications/Cydia.app","/Library/MobileSubstrate","/bin/bash","/etc/apt","/var/jb","/private/preboot/jb"] {
-            if access(p, F_OK) == 0 { return true }
-        }
-        let t = "/var/mobile/Library/jbchk"
-        do { try "." .write(toFile: t, atomically: true, encoding: .utf8); try FileManager.default.removeItem(atPath: t); return true } catch { }
-        return false
-    }
+    private func connect() {
+        let host = NWEndpoint.Host("127.0.0.1")
+        connection = NWConnection(host: host, port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
 
-    private func setupEventQueue() {
-        eventQueue.async { [weak self] in
-            guard let self = self else { return }
-
-            guard let h = _dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else { return }
-            self.handle = h
-
-            guard let cc = _dlsym(h, "IOHIDEventSystemClientCreate"),
-                  let cd = _dlsym(h, "IOHIDEventCreateDigitizerEvent"),
-                  let dp = _dlsym(h, "IOHIDEventSystemClientDispatchEvent"),
-                  let sc = _dlsym(h, "IOHIDEventSystemClientScheduleWithRunLoop") else { return }
-
-            let createClientFn = unsafeBitCast(cc, to: CreateClientC.self)
-            guard let c = createClientFn(kCFAllocatorDefault) else { return }
-
-            self.client = c
-            self.createDigitizerRaw = cd
-            self.dispatchRaw = dp
-            self.scheduleRaw = sc
-
-            // schedule on this queue's run loop
-            let scheduleFn = unsafeBitCast(sc, to: ScheduleC.self)
-            scheduleFn(c, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
-
-            self.canSimulateTouches = true
-            self.queueInitialized = true
-
-            // keep run loop alive
-            while self.canSimulateTouches {
-                CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 1.0, true)
+        connection?.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                self?.connectionReady = true
+                self?.canSimulateTouches = true
+                self?.flushPending()
+            case .failed, .cancelled:
+                self?.canSimulateTouches = false
+                self?.connectionReady = false
+            default:
+                break
             }
         }
+        connection?.start(queue: queue)
     }
 
-    private func ts() -> UInt64 { _mach_absolute_time() }
-
-    private func iofix(_ v: CGFloat) -> Int32 { Int32(v * 65536) }
-
-    private func makeEvent(isDown: Bool, isUp: Bool, point: CGPoint) -> IOHIDRef? {
-        guard let p = createDigitizerRaw else { return nil }
-        let fn = unsafeBitCast(p, to: CreateDigitizerC.self)
-        let mask: UInt32 = isUp ? 0x01 : (0x01 | 0x02 | 0x04)
-        return fn(kCFAllocatorDefault, ts(), 3, 0, 2, mask, 0,
-                  iofix(point.x), iofix(point.y), 0,
-                  isDown ? iofix(1.0) : 0, 0,
-                  true,  // range always true
-                  !isUp,  // touch = false on up
-                  0)
-    }
-
-    private func enqueue(_ work: @escaping () -> Void) {
-        eventQueue.sync {
-            guard self.queueInitialized, self.canSimulateTouches else { return }
-            work()
+    private func flushPending() {
+        for data in pending {
+            sendRaw(data)
         }
+        pending.removeAll()
+    }
+
+    private func sendRaw(_ data: Data) {
+        guard let conn = connection, connectionReady else {
+            pending.append(data)
+            return
+        }
+        conn.send(content: data, completion: .contentProcessed({ _ in }))
+    }
+
+    private func sendCommand(_ taskType: Int, _ data: String) {
+        let msg = "\(taskType);;\(data)\r\n"
+        guard let raw = msg.data(using: .utf8) else { return }
+        sendRaw(raw)
+    }
+
+    private func formatCoord(_ val: CGFloat) -> String {
+        let scaled = Int(val * 10)
+        return String(format: "%05d", scaled)
+    }
+
+    private func buildTouchData(type: Int, finger: Int, x: CGFloat, y: CGFloat) -> String {
+        "1\(type)\(String(format: "%02d", finger))\(formatCoord(x))\(formatCoord(y))"
     }
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) {
-        enqueue {
-            guard let ev = self.makeEvent(isDown: true, isUp: false, point: point),
-                  let c = self.client, let dp = self.dispatchRaw else { return }
-            let fn = unsafeBitCast(dp, to: DispatchC.self)
-            fn(c, ev)
-        }
+        sendCommand(taskTouch, buildTouchData(type: 1, finger: Int(fingerId), x: point.x, y: point.y))
     }
 
     func touchMove(to point: CGPoint, fingerId: Int32 = 0) {
-        enqueue {
-            guard let ev = self.makeEvent(isDown: true, isUp: false, point: point),
-                  let c = self.client, let dp = self.dispatchRaw else { return }
-            let fn = unsafeBitCast(dp, to: DispatchC.self)
-            fn(c, ev)
-        }
+        sendCommand(taskTouch, buildTouchData(type: 2, finger: Int(fingerId), x: point.x, y: point.y))
     }
 
     func touchUp(at point: CGPoint, fingerId: Int32 = 0) {
-        enqueue {
-            guard let ev = self.makeEvent(isDown: false, isUp: true, point: point),
-                  let c = self.client, let dp = self.dispatchRaw else { return }
-            let fn = unsafeBitCast(dp, to: DispatchC.self)
-            fn(c, ev)
-        }
+        sendCommand(taskTouch, buildTouchData(type: 3, finger: Int(fingerId), x: point.x, y: point.y))
     }
 
     func tap(at point: CGPoint) {
