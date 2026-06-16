@@ -53,7 +53,7 @@ struct MacroAction: Identifiable, Codable, Equatable {
     }
 
     static func keyPress(_ key: String, delay: TimeInterval = 0) -> MacroAction {
-        MacroAction(type: .keyPress, key: key, delay: delay)
+        MacroAction(type: .keyPress, delay: delay, key: key)
     }
 
     static func wait(_ duration: TimeInterval) -> MacroAction {
@@ -61,6 +61,6 @@ struct MacroAction: Identifiable, Codable, Equatable {
     }
 
     static func scroll(delta: CGFloat, delay: TimeInterval = 0) -> MacroAction {
-        MacroAction(type: .scroll, scrollDelta: delta, delay: delay)
+        MacroAction(type: .scroll, delay: delay, scrollDelta: delta)
     }
 }

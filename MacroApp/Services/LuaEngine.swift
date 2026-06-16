@@ -220,7 +220,7 @@ final class LuaEngine: ObservableObject {
                 .first(where: { $0.isKeyWindow }) else { return }
 
             let center = CGPoint(x: window.bounds.midX, y: window.bounds.midY)
-            window.hitTest(center, with: nil)?.layer?.position = CGPoint(
+            window.hitTest(center, with: nil)?.layer.position = CGPoint(
                 x: center.x,
                 y: center.y + delta
             )

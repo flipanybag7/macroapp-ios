@@ -302,7 +302,7 @@ struct RecordView: View {
                             saveMacro()
                             showNamePrompt = false
                         }
-                        .fontWeight(.semibold)
+                        .font(.headline)
                         .foregroundColor(.green)
                     }
                 }

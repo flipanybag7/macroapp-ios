@@ -138,7 +138,6 @@ struct MacroPlaybackView: View {
                     .background(Color.blue.opacity(0.3))
                     .foregroundColor(.white)
                     .cornerRadius(12)
-                    .fontWeight(.semibold)
                 }
 
                 Button(action: togglePlayback) {
@@ -165,7 +164,6 @@ struct MacroPlaybackView: View {
                     .background(Color.gray.opacity(0.2))
                     .foregroundColor(.gray)
                     .cornerRadius(12)
-                    .fontWeight(.semibold)
                 }
             }
             .padding(.horizontal, 16)
