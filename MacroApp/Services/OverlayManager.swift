@@ -4,8 +4,6 @@ import UIKit
 final class OverlayWindow: UIWindow {
     static let shared = OverlayWindow()
 
-    private var hostController: UIHostingController<AnyView>?
-
     private init() {
         if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
             super.init(windowScene: scene)
@@ -20,10 +18,9 @@ final class OverlayWindow: UIWindow {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(with view: some View) {
+    func show<V: View>(with view: V) {
         let controller = UIHostingController(rootView: view)
         controller.view.backgroundColor = .clear
-        hostController = controller
         rootViewController = controller
         isHidden = false
     }
@@ -31,12 +28,6 @@ final class OverlayWindow: UIWindow {
     func hide() {
         isHidden = true
         rootViewController = nil
-        hostController = nil
-    }
-
-    func update<T: View>(_ view: T) {
-        guard let host = hostController else { return }
-        host.rootView = AnyView(view)
     }
 }
 
@@ -131,39 +122,31 @@ final class OverlayManager: ObservableObject {
     static let shared = OverlayManager()
 
     @Published var isShowing = false
-    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     func show(recorder: TouchRecorder, player: MacroPlayer, recordedActions: Binding<[MacroAction]>) {
         guard !isShowing else { return }
-
         var recActions = recordedActions.wrappedValue
 
-        let overlay = FloatingOverlay(
-            recorder: recorder,
-            player: player,
-            onRecord: {
-                recorder.startRecording()
-            },
-            onStop: {
-                if recorder.state == .recording {
-                    recActions = recorder.stopRecording()
-                    recordedActions.wrappedValue = recActions
-                } else {
-                    player.stop()
-                }
-            },
-            onPlay: {
-                player.loadActions(recActions)
-                player.play { _, _ in }
-            },
-            onDismiss: {
-                OverlayManager.shared.hide()
-            },
-            savedCount: recActions.count
-        )
-
         DispatchQueue.main.async {
-            OverlayWindow.shared.show(with: overlay)
+            OverlayWindow.shared.show(with: FloatingOverlay(
+                recorder: recorder,
+                player: player,
+                onRecord: { recorder.startRecording() },
+                onStop: {
+                    if recorder.state == .recording {
+                        recActions = recorder.stopRecording()
+                        recordedActions.wrappedValue = recActions
+                    } else {
+                        player.stop()
+                    }
+                },
+                onPlay: {
+                    player.loadActions(recActions)
+                    player.play { _, _ in }
+                },
+                onDismiss: { OverlayManager.shared.hide() },
+                savedCount: recActions.count
+            ))
             self.isShowing = true
         }
     }
@@ -171,19 +154,5 @@ final class OverlayManager: ObservableObject {
     func hide() {
         OverlayWindow.shared.hide()
         isShowing = false
-    }
-
-    func startBackgroundTask() {
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "MacroOverlay") {
-            UIApplication.shared.endBackgroundTask(self.backgroundTask)
-            self.backgroundTask = .invalid
-        }
-    }
-
-    func endBackgroundTask() {
-        if backgroundTask != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTask)
-            backgroundTask = .invalid
-        }
     }
 }
