@@ -114,6 +114,15 @@ struct RecordView: View {
                             )
                             .position(point)
                             .allowsHitTesting(false)
+
+                        if action.type == .swipe, let end = action.endPoint {
+                            Path { path in
+                                path.move(to: point)
+                                path.addLine(to: end)
+                            }
+                            .stroke(actionColor(.swipe), style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                            .allowsHitTesting(false)
+                        }
                     }
                 }
             }
@@ -210,6 +219,15 @@ struct RecordView: View {
                         .font(.subheadline)
                 }
                 .disabled(recordedActions.isEmpty)
+
+                if !recordedActions.isEmpty || recorder.state == .recording {
+                    Button(action: {
+                        OverlayManager.shared.show(recorder: recorder, player: player, recordedActions: $recordedActions)
+                    }) {
+                        Label("Float", systemImage: "pip.enter")
+                            .font(.subheadline)
+                    }
+                }
 
                 Spacer()
 
