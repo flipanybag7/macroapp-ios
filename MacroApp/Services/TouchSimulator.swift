@@ -16,19 +16,19 @@ final class TouchSimulator {
         #if targetEnvironment(simulator)
         return
         #endif
-        guard isJailbroken() else { return }
+        // Try jailbreak detection and helper setup, regardless
+        if !isJailbroken() {
+            // still try - maybe detection failed but helper works
+        }
         setupHelper()
     }
 
     private func isJailbroken() -> Bool {
-        for p in ["/Applications/Cydia.app","/Library/MobileSubstrate","/bin/bash","/etc/apt","/var/jb","/private/preboot/jb"] {
-            if access(p, F_OK) == 0 { return true }
-        }
-        do {
-            try ".".write(toFile: "/var/mobile/Library/jbchk", atomically: true, encoding: .utf8)
-            try FileManager.default.removeItem(atPath: "/var/mobile/Library/jbchk")
-            return true
-        } catch { return false }
+        if access("/var/jb/usr/bin/sudo", X_OK) == 0 { return true }
+        if access("/var/jb", F_OK) == 0 { return true }
+        if access("/private/preboot/jb", F_OK) == 0 { return true }
+        if access("/Applications/Cydia.app", F_OK) == 0 { return true }
+        return false
     }
 
     private func setupHelper() {
