@@ -26,8 +26,12 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 
+      - name: Patch project format for Xcode 15.4 compat
+        run: sed -i '' 's/objectVersion = 77;/objectVersion = 56;/g' MacroApp.xcodeproj/project.pbxproj
+
       - name: Build archive
         run: |
+          set -o pipefail
           xcodebuild archive \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
