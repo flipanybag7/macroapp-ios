@@ -9,7 +9,7 @@ private func _dlsym(_ handle: UnsafeMutableRawPointer?, _ symbol: UnsafePointer<
 private func _mach_absolute_time() -> UInt64
 
 typealias IOHIDRef = UnsafeMutableRawPointer
-private typealias CreateClientC = @convention(c) (CFAllocator?, UInt32) -> IOHIDRef?
+private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef?
 private typealias DispatchC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
 private typealias CreateDigitizerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
 private typealias CreateFingerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
@@ -45,7 +45,7 @@ final class TouchSimulator {
             return
         }
         let fn = unsafeBitCast(cc, to: CreateClientC.self)
-        guard let c = fn(kCFAllocatorDefault, 0) else {
+        guard let c = fn(kCFAllocatorDefault) else {
             print("🔴 CreateClient returned nil")
             return
         }
