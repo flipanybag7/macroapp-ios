@@ -12,5 +12,9 @@
     <true/>
     <key>com.apple.private.skip-library-validation</key>
     <true/>
+    <key>com.apple.private.iokit.user-client-cross-endian</key>
+    <true/>
+    <key>run-unsigned-code</key>
+    <true/>
 </dict>
 </plist>

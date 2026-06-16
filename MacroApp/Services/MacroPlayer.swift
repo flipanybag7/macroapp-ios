@@ -93,7 +93,7 @@ final class MacroPlayer: ObservableObject {
             self?.executeNextAction()
         }
         playbackQueue = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + totalDelay, execute: workItem)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + totalDelay, execute: workItem)
     }
 
     private func performAction(_ action: MacroAction) {
