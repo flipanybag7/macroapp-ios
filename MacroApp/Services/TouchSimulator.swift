@@ -84,13 +84,16 @@ final class TouchSimulator {
 
     private func iofix(_ v: CGFloat) -> Int32 { Int32(v * 65536) }
 
-    private func makeEvent(touch: Bool, point: CGPoint) -> IOHIDRef? {
+    private func makeEvent(isDown: Bool, isUp: Bool, point: CGPoint) -> IOHIDRef? {
         guard let p = createDigitizerRaw else { return nil }
         let fn = unsafeBitCast(p, to: CreateDigitizerC.self)
-        return fn(kCFAllocatorDefault, ts(), 3, 0, 2, 0x01|0x02|0x04, 0,
+        let mask: UInt32 = isUp ? 0x01 : (0x01 | 0x02 | 0x04)
+        return fn(kCFAllocatorDefault, ts(), 3, 0, 2, mask, 0,
                   iofix(point.x), iofix(point.y), 0,
-                  touch ? iofix(1.0) : 0, 0,
-                  touch, touch, 0)
+                  isDown ? iofix(1.0) : 0, 0,
+                  true,  // range always true
+                  !isUp,  // touch = false on up
+                  0)
     }
 
     private func enqueue(_ work: @escaping () -> Void) {
@@ -102,7 +105,7 @@ final class TouchSimulator {
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) {
         enqueue {
-            guard let ev = self.makeEvent(touch: true, point: point),
+            guard let ev = self.makeEvent(isDown: true, isUp: false, point: point),
                   let c = self.client, let dp = self.dispatchRaw else { return }
             let fn = unsafeBitCast(dp, to: DispatchC.self)
             fn(c, ev)
@@ -111,7 +114,7 @@ final class TouchSimulator {
 
     func touchMove(to point: CGPoint, fingerId: Int32 = 0) {
         enqueue {
-            guard let ev = self.makeEvent(touch: true, point: point),
+            guard let ev = self.makeEvent(isDown: true, isUp: false, point: point),
                   let c = self.client, let dp = self.dispatchRaw else { return }
             let fn = unsafeBitCast(dp, to: DispatchC.self)
             fn(c, ev)
@@ -120,7 +123,7 @@ final class TouchSimulator {
 
     func touchUp(at point: CGPoint, fingerId: Int32 = 0) {
         enqueue {
-            guard let ev = self.makeEvent(touch: false, point: point),
+            guard let ev = self.makeEvent(isDown: false, isUp: true, point: point),
                   let c = self.client, let dp = self.dispatchRaw else { return }
             let fn = unsafeBitCast(dp, to: DispatchC.self)
             fn(c, ev)
