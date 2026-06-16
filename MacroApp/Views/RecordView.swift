@@ -203,20 +203,26 @@ struct RecordView: View {
 
             HStack(spacing: 16) {
                 Button(action: { showNamePrompt = true }) {
-                    Label("Save", systemImage: "square.and.arrow.down")
-                        .font(.subheadline)
+                    VStack(spacing: 2) {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Save").font(.system(size: 9))
+                    }
                 }
                 .disabled(recordedActions.isEmpty)
 
                 Button(action: { showLuaPreview = true }) {
-                    Label("Lua", systemImage: "doc.text")
-                        .font(.subheadline)
+                    VStack(spacing: 2) {
+                        Image(systemName: "doc.text")
+                        Text("Lua").font(.system(size: 9))
+                    }
                 }
                 .disabled(recordedActions.isEmpty)
 
                 Button(action: clearActions) {
-                    Label("Clear", systemImage: "trash")
-                        .font(.subheadline)
+                    VStack(spacing: 2) {
+                        Image(systemName: "trash")
+                        Text("Clear").font(.system(size: 9))
+                    }
                 }
                 .disabled(recordedActions.isEmpty)
 
@@ -224,22 +230,20 @@ struct RecordView: View {
                     Button(action: {
                         OverlayManager.shared.show(recorder: recorder, player: player, recordedActions: $recordedActions)
                     }) {
-                        Label("Float", systemImage: "pip.enter")
-                            .font(.subheadline)
+                        VStack(spacing: 2) {
+                            Image(systemName: "pip.enter")
+                            Text("Float").font(.system(size: 9))
+                        }
                     }
                 }
 
                 Spacer()
 
-                Text("\(recordedActions.count) actions")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-
-                if !recordedActions.isEmpty {
+                VStack(spacing: 2) {
+                    Text("\(recordedActions.count)").font(.system(size: 10, weight: .bold)).foregroundColor(.white)
                     Text(TouchSimulator.shared.canSimulateTouches ? "JB:ON" : "JB:OFF")
-                        .font(.system(size: 9))
+                        .font(.system(size: 8))
                         .foregroundColor(TouchSimulator.shared.canSimulateTouches ? .green : .gray)
-                        .padding(.leading, 4)
                 }
             }
             .padding(.horizontal, 16)

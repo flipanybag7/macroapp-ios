@@ -1,22 +1,24 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 
 final class OverlayWindow: UIWindow {
-    static let shared = OverlayWindow()
-
-    private init() {
+    static let shared: OverlayWindow = {
         if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-            super.init(windowScene: scene)
-        } else {
-            super.init(frame: UIScreen.main.bounds)
+            let w = OverlayWindow(windowScene: scene)
+            w.windowLevel = UIWindow.Level.statusBar + 1
+            w.backgroundColor = .clear
+            w.isHidden = true
+            w.isUserInteractionEnabled = true
+            return w
         }
-        self.windowLevel = UIWindow.Level.statusBar + 1
-        self.backgroundColor = .clear
-        self.isHidden = true
-        self.isUserInteractionEnabled = true
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
+        let w = OverlayWindow(frame: UIScreen.main.bounds)
+        w.windowLevel = UIWindow.Level.statusBar + 1
+        w.backgroundColor = .clear
+        w.isHidden = true
+        w.isUserInteractionEnabled = true
+        return w
+    }()
 
     func show<V: View>(with view: V) {
         let controller = UIHostingController(rootView: view)
@@ -122,9 +124,10 @@ final class OverlayManager: ObservableObject {
     static let shared = OverlayManager()
 
     @Published var isShowing = false
+    private var bgTask: UIBackgroundTaskIdentifier = .invalid
+    private var audioPlayer: AVAudioPlayer?
 
     func show(recorder: TouchRecorder, player: MacroPlayer, recordedActions: Binding<[MacroAction]>) {
-        guard !isShowing else { return }
         var recActions = recordedActions.wrappedValue
 
         DispatchQueue.main.async {
@@ -148,11 +151,60 @@ final class OverlayManager: ObservableObject {
                 savedCount: recActions.count
             ))
             self.isShowing = true
+            self.keepAlive()
         }
     }
 
     func hide() {
         OverlayWindow.shared.hide()
         isShowing = false
+        audioPlayer?.stop()
+        if bgTask != .invalid {
+            UIApplication.shared.endBackgroundTask(bgTask)
+            bgTask = .invalid
+        }
+    }
+
+    private func keepAlive() {
+        // play silent audio to keep app alive
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, options: .mixWithOthers)
+        try? session.setActive(true)
+        // silent WAV: 0.1s at 44100Hz
+        let sampleRate = 44100.0
+        let duration = 0.1
+        let numSamples = Int(sampleRate * duration)
+        var bytes = Data(count: 44 + numSamples * 2)
+        let header: [UInt8] = [
+            0x52,0x49,0x46,0x46, // RIFF
+            UInt8((36 + numSamples * 2) & 0xff),
+            UInt8(((36 + numSamples * 2) >> 8) & 0xff),
+            UInt8(((36 + numSamples * 2) >> 16) & 0xff),
+            UInt8(((36 + numSamples * 2) >> 24) & 0xff),
+            0x57,0x41,0x56,0x45, // WAVE
+            0x66,0x6d,0x74,0x20, // fmt
+            0x10,0x00,0x00,0x00, // chunk size 16
+            0x01,0x00, // PCM
+            0x02,0x00, // 2 channels
+            UInt8(Int(sampleRate) & 0xff),
+            UInt8((Int(sampleRate) >> 8) & 0xff),
+            UInt8((Int(sampleRate) >> 16) & 0xff),
+            UInt8((Int(sampleRate) >> 24) & 0xff),
+            0x44,0xac,0x00,0x00, // byte rate
+            0x04,0x00, // block align
+            0x10,0x00, // bits per sample
+            0x64,0x61,0x74,0x61, // data
+            UInt8((numSamples * 2) & 0xff),
+            UInt8(((numSamples * 2) >> 8) & 0xff),
+            UInt8(((numSamples * 2) >> 16) & 0xff),
+            UInt8(((numSamples * 2) >> 24) & 0xff),
+        ]
+        bytes.replaceSubrange(0..<44, with: header)
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "silent.wav")
+        try? bytes.write(to: tmp)
+        audioPlayer = try? AVAudioPlayer(contentsOf: tmp)
+        audioPlayer?.numberOfLoops = -1 // infinite loop
+        audioPlayer?.volume = 0
+        audioPlayer?.play()
     }
 }
