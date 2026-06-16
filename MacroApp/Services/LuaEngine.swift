@@ -174,7 +174,7 @@ final class LuaEngine: ObservableObject {
             let t = Double(i) / Double(steps)
             let x = from.x + (to.x - from.x) * t
             let y = from.y + (to.y - from.y) * t
-            let point = CGPoint(x: x, y: y)
+            _ = CGPoint(x: x, y: y)
 
             DispatchQueue.main.async {
                 guard let window = UIApplication.shared.connectedScenes

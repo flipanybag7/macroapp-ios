@@ -57,10 +57,10 @@ struct MacroEditView: View {
                         Button(action: { showAddAction = true }) {
                             Image(systemName: "plus")
                         }
-                        Button("Save") {
-                            save()
+                        Button(action: save) {
+                            Text("Save")
+                                .font(.headline)
                         }
-                        .fontWeight(.bold)
                     }
                 }
             }

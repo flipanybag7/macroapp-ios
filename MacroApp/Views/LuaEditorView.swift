@@ -235,7 +235,7 @@ struct LuaEditorView: View {
 
             if TouchSimulator.shared.canSimulateTouches {
                 output += "\nRunning on device...\n"
-                var player = MacroPlayer()
+                let player = MacroPlayer()
                 player.loadActions(actions)
                 player.play { _, _ in }
             } else {
