@@ -23,31 +23,6 @@ jobs:
       - name: Install xcodegen
         run: brew install xcodegen
 
-      - name: Compile touch helper
-        run: |
-          cat > /tmp/th.c << 'CEOF'
-          #include <CoreFoundation/CoreFoundation.h>
-          #include <mach/mach_time.h>
-          #include <stdlib.h>
-          #include <unistd.h>
-          typedef void* IOHIDSystemRef; typedef void* IOHIDRef;
-          extern IOHIDSystemRef IOHIDEventSystemClientCreate(CFAllocatorRef);
-          extern IOHIDRef IOHIDEventCreateDigitizerFingerEvent(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int, int, uint32_t);
-          extern IOHIDRef IOHIDEventCreateDigitizerEvent(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int, int, uint32_t);
-          extern void IOHIDEventAppendEvent(IOHIDRef, IOHIDRef);
-          extern void IOHIDEventSystemClientDispatchEvent(IOHIDSystemRef, IOHIDRef);
-          int main(int c, char** v) { if(c!=5) return 1; int t=atoi(v[1]); float x=atof(v[2]),y=atof(v[3]); uint64_t mt=mach_absolute_time();
-          #define F(p) ((int32_t)((p)*65536))
-          IOHIDSystemRef cl=IOHIDEventSystemClientCreate(NULL); if(!cl) return 2;
-          IOHIDRef p=IOHIDEventCreateDigitizerEvent(NULL,mt,3,0,2,1,0,0,0,0,0,0,1,0,0);
-          IOHIDRef e=IOHIDEventCreateDigitizerFingerEvent(NULL,mt,0,2,(t==2?1:7),F(x),F(y),0,F(t==2?0:1),0,t!=2,t!=2,0);
-          IOHIDEventAppendEvent(p,e); IOHIDEventSystemClientDispatchEvent(cl,p); CFRelease(e);CFRelease(p);CFRelease(cl); return 0; }
-          CEOF
-          clang -arch arm64 -isysroot /Applications/Xcode_15.4.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk -framework IOKit -framework CoreFoundation -o /tmp/th /tmp/th.c
-          mkdir -p MacroApp/Resources
-          xxd -i /tmp/th | sed 's/unsigned char .*/let helperBinary: [UInt8] = [/; s/};/]/; /unsigned int/d' > MacroApp/Resources/HelperBinary.swift
-          echo "// Auto-generated helper binary" | cat - MacroApp/Resources/HelperBinary.swift > /tmp/hb.swift && mv /tmp/hb.swift MacroApp/Resources/HelperBinary.swift
-
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 
