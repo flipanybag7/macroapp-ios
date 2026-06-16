@@ -4,8 +4,6 @@ import Darwin
 @_silgen_name("posix_spawn")
 func _posix_spawn(_ pid: UnsafeMutablePointer<pid_t>?, _ path: UnsafePointer<CChar>, _ fileActions: UnsafeMutablePointer<posix_spawn_file_actions_t>?, _ attrp: UnsafeMutablePointer<posix_spawnattr_t>?, _ argv: UnsafePointer<UnsafeMutablePointer<CChar>?>?, _ envp: UnsafePointer<UnsafeMutablePointer<CChar>?>?) -> Int32
 
-let helperBinary: [UInt8] = []
-
 final class TouchSimulator {
     static let shared = TouchSimulator()
 
