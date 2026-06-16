@@ -5,17 +5,14 @@ import Darwin
 typealias IOHIDRef = UnsafeMutableRawPointer
 
 private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef?
-private typealias DispatchC = @convention(c) (IOHIDRef, IOHIDRef) -> Void
-private typealias AppendC = @convention(c) (IOHIDRef, IOHIDRef) -> Void
-private typealias CreateFingerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef
-private typealias CreateDigitizerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef
+private typealias DispatchC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
+private typealias AppendC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
+private typealias CreateDigitizerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
 
 @_silgen_name("dlopen")
 private func _dlopen(_ path: UnsafePointer<CChar>, _ mode: Int32) -> UnsafeMutableRawPointer?
-
 @_silgen_name("dlsym")
 private func _dlsym(_ handle: UnsafeMutableRawPointer?, _ symbol: UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
-
 @_silgen_name("mach_absolute_time")
 private func _mach_absolute_time() -> UInt64
 
@@ -25,117 +22,92 @@ final class TouchSimulator {
     private var handle: UnsafeMutableRawPointer?
     private var client: IOHIDRef?
 
-    private var createDigitizerPtr: UnsafeMutableRawPointer?
-    private var createFingerPtr: UnsafeMutableRawPointer?
-    private var appendEventPtr: UnsafeMutableRawPointer?
-    private var dispatchEventPtr: UnsafeMutableRawPointer?
+    private var createDigitizerRaw: UnsafeMutableRawPointer?
+    private var appendRaw: UnsafeMutableRawPointer?
+    private var dispatchRaw: UnsafeMutableRawPointer?
 
     private(set) var canSimulateTouches = false
+    private var debugLog: [String] = []
 
     private init() {
         #if targetEnvironment(simulator)
         return
         #endif
-
         guard isJailbroken() else { return }
         loadIOKit()
     }
 
     private func isJailbroken() -> Bool {
-        let paths = [
-            "/Applications/Cydia.app",
-            "/Library/MobileSubstrate/MobileSubstrate.dylib",
-            "/bin/bash",
-            "/etc/apt",
-            "/var/jb",
-            "/private/preboot/jb"
-        ]
-        for p in paths {
+        for p in ["/Applications/Cydia.app", "/Library/MobileSubstrate", "/bin/bash", "/etc/apt", "/var/jb", "/private/preboot/jb"] {
             if access(p, F_OK) == 0 { return true }
         }
         let t = "/var/mobile/Library/jbchk"
-        do {
-            try "." .write(toFile: t, atomically: true, encoding: .utf8)
-            try FileManager.default.removeItem(atPath: t)
-            return true
-        } catch { }
+        do { try "." .write(toFile: t, atomically: true, encoding: .utf8); try FileManager.default.removeItem(atPath: t); return true } catch { }
         return false
     }
 
     private func loadIOKit() {
         guard let h = _dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else {
+            debugLog.append("dlopen IOKit failed")
             return
         }
         handle = h
 
-        let syms: [(String, UnsafeMutableRawPointer?)] = [
-            ("IOHIDEventSystemClientCreate", nil),
-            ("IOHIDEventSystemClientDispatchEvent", nil),
-            ("IOHIDEventAppendEvent", nil),
-            ("IOHIDEventCreateDigitizerFingerEvent", nil),
-            ("IOHIDEventCreateDigitizerEvent", nil),
-        ]
-
-        var resolved: [String: UnsafeMutableRawPointer] = [:]
-        for (name, _) in syms {
-            if let ptr = _dlsym(h, name) {
-                resolved[name] = ptr
-            } else {
-                return
-            }
-        }
-
-        guard let createClientRaw = resolved["IOHIDEventSystemClientCreate"] else { return }
-        let createClient = unsafeBitCast(createClientRaw, to: CreateClientC.self)
-        guard let c = createClient(kCFAllocatorDefault) else { return }
-
+        guard let cc = _dlsym(h, "IOHIDEventSystemClientCreate") else { debugLog.append("no CreateClient"); return }
+        let createClientFn = unsafeBitCast(cc, to: CreateClientC.self)
+        guard let c = createClientFn(kCFAllocatorDefault) else { debugLog.append("CreateClient returned nil"); return }
         client = c
-        createDigitizerPtr = resolved["IOHIDEventCreateDigitizerEvent"]
-        createFingerPtr = resolved["IOHIDEventCreateDigitizerFingerEvent"]
-        appendEventPtr = resolved["IOHIDEventAppendEvent"]
-        dispatchEventPtr = resolved["IOHIDEventSystemClientDispatchEvent"]
+
+        guard let cd = _dlsym(h, "IOHIDEventCreateDigitizerEvent") else { debugLog.append("no CreateDigitizer"); return }
+        createDigitizerRaw = cd
+
+        guard let ap = _dlsym(h, "IOHIDEventAppendEvent") else { debugLog.append("no Append"); return }
+        appendRaw = ap
+
+        guard let dp = _dlsym(h, "IOHIDEventSystemClientDispatchEvent") else { debugLog.append("no Dispatch"); return }
+        dispatchRaw = dp
+
         canSimulateTouches = true
+        debugLog.append("IOKit loaded OK")
     }
 
-    private func iofix(_ v: CGFloat) -> Int32 { Int32(v * 65536) }
     private func ts() -> UInt64 { _mach_absolute_time() }
 
-    private func parentEvent() -> IOHIDRef? {
-        guard let p = createDigitizerPtr else { return nil }
+    private func iofix(_ v: CGFloat) -> Int32 { Int32(v * 65536) }
+
+    private func makeEvent(touch: Bool, point: CGPoint) -> IOHIDRef? {
+        guard let p = createDigitizerRaw else { return nil }
         let fn = unsafeBitCast(p, to: CreateDigitizerC.self)
-        return fn(kCFAllocatorDefault, ts(), 3, 0, 2, 0x01, 0, 0, 0, 0, 0, 0, true, false, 0)
-    }
-
-    private func fingerEvent(at point: CGPoint, touch: Bool, range: Bool) -> IOHIDRef? {
-        guard let p = createFingerPtr else { return nil }
-        let fn = unsafeBitCast(p, to: CreateFingerC.self)
-        return fn(kCFAllocatorDefault, ts(), 0, 2, 0x01|0x02|0x04,
+        let mask: UInt32 = 0x01 | 0x02 | 0x04
+        return fn(kCFAllocatorDefault, ts(), 3, 0, 2, mask, 0,
                   iofix(point.x), iofix(point.y), 0,
-                  iofix(touch ? 30 : 0), 0, range, touch, 0)
+                  touch ? iofix(1.0) : 0, 0,
+                  touch, touch, 0)
     }
 
-    private func post(_ finger: IOHIDRef) {
-        guard let c = client, let parent = parentEvent(),
-              let app = appendEventPtr, let dsp = dispatchEventPtr else { return }
-        let append = unsafeBitCast(app, to: AppendC.self)
-        append(parent, finger)
-        let dispatch = unsafeBitCast(dsp, to: DispatchC.self)
-        dispatch(c, parent)
+    private func dispatch(_ ev: IOHIDRef?) {
+        guard let c = client, let ev = ev, let dp = dispatchRaw else { return }
+        let dispatchFn = unsafeBitCast(dp, to: DispatchC.self)
+        dispatchFn(c, ev)
+    }
+
+    private func makeParent() -> IOHIDRef? {
+        nil
     }
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) {
-        guard canSimulateTouches, let ev = fingerEvent(at: point, touch: true, range: true) else { return }
-        post(ev)
+        guard canSimulateTouches else { return }
+        dispatch(makeEvent(touch: true, point: point))
     }
 
     func touchMove(to point: CGPoint, fingerId: Int32 = 0) {
-        guard canSimulateTouches, let ev = fingerEvent(at: point, touch: true, range: true) else { return }
-        post(ev)
+        guard canSimulateTouches else { return }
+        dispatch(makeEvent(touch: true, point: point))
     }
 
     func touchUp(at point: CGPoint, fingerId: Int32 = 0) {
-        guard canSimulateTouches, let ev = fingerEvent(at: point, touch: false, range: false) else { return }
-        post(ev)
+        guard canSimulateTouches else { return }
+        dispatch(makeEvent(touch: false, point: point))
     }
 
     func tap(at point: CGPoint) {
@@ -160,9 +132,7 @@ final class TouchSimulator {
         for i in 1...steps {
             usleep(step)
             let t = Double(i) / Double(steps)
-            let x = start.x + (end.x - start.x) * t
-            let y = start.y + (end.y - start.y) * t
-            touchMove(to: CGPoint(x: x, y: y))
+            touchMove(to: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
         }
         usleep(40000)
         touchUp(at: end)
