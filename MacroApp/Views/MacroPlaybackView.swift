@@ -10,6 +10,18 @@ struct MacroPlaybackView: View {
     @State private var animationWorkItem: DispatchWorkItem?
     @Environment(\.dismiss) private var dismiss
 
+    private var jbStatusText: String {
+        if TouchSimulator.shared.canSimulateTouches {
+            return "JB: real touches ON"
+        } else {
+            return "JB not detected · visual only"
+        }
+    }
+
+    private var jbStatusColor: Color {
+        TouchSimulator.shared.canSimulateTouches ? .green : .gray
+    }
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -207,6 +219,10 @@ struct MacroPlaybackView: View {
                     Label("View Lua", systemImage: "chevron.left.slash.chevron.right")
                         .font(.subheadline)
                 }
+
+                Text(jbStatusText)
+                    .font(.system(size: 9))
+                    .foregroundColor(jbStatusColor)
             }
             .padding(.horizontal, 16)
             .foregroundColor(.white)
