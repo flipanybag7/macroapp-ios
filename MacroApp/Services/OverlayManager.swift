@@ -4,7 +4,7 @@ import UIKit
 final class OverlayWindow: UIWindow {
     static let shared = OverlayWindow()
 
-    private var hostController: UIViewController?
+    private var hostController: UIHostingController<AnyView>?
 
     private init() {
         if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
