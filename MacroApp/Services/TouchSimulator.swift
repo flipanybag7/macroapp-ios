@@ -6,7 +6,7 @@ typealias IOHIDRef = UnsafeMutableRawPointer
 
 private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef?
 private typealias DispatchC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
-private typealias AppendC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
+private typealias ScheduleC = @convention(c) (IOHIDRef?, CFRunLoop?, CFString?) -> Void
 private typealias CreateDigitizerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
 
 @_silgen_name("dlopen")
@@ -21,24 +21,24 @@ final class TouchSimulator {
 
     private var handle: UnsafeMutableRawPointer?
     private var client: IOHIDRef?
-
     private var createDigitizerRaw: UnsafeMutableRawPointer?
-    private var appendRaw: UnsafeMutableRawPointer?
     private var dispatchRaw: UnsafeMutableRawPointer?
+    private var scheduleRaw: UnsafeMutableRawPointer?
+    private var eventQueue = DispatchQueue(label: "touchsim.hid", qos: .userInteractive)
+    private var queueInitialized = false
 
     private(set) var canSimulateTouches = false
-    private var debugLog: [String] = []
 
     private init() {
         #if targetEnvironment(simulator)
         return
         #endif
         guard isJailbroken() else { return }
-        loadIOKit()
+        setupEventQueue()
     }
 
     private func isJailbroken() -> Bool {
-        for p in ["/Applications/Cydia.app", "/Library/MobileSubstrate", "/bin/bash", "/etc/apt", "/var/jb", "/private/preboot/jb"] {
+        for p in ["/Applications/Cydia.app","/Library/MobileSubstrate","/bin/bash","/etc/apt","/var/jb","/private/preboot/jb"] {
             if access(p, F_OK) == 0 { return true }
         }
         let t = "/var/mobile/Library/jbchk"
@@ -46,29 +46,38 @@ final class TouchSimulator {
         return false
     }
 
-    private func loadIOKit() {
-        guard let h = _dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else {
-            debugLog.append("dlopen IOKit failed")
-            return
+    private func setupEventQueue() {
+        eventQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            guard let h = _dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else { return }
+            self.handle = h
+
+            guard let cc = _dlsym(h, "IOHIDEventSystemClientCreate"),
+                  let cd = _dlsym(h, "IOHIDEventCreateDigitizerEvent"),
+                  let dp = _dlsym(h, "IOHIDEventSystemClientDispatchEvent"),
+                  let sc = _dlsym(h, "IOHIDEventSystemClientScheduleWithRunLoop") else { return }
+
+            let createClientFn = unsafeBitCast(cc, to: CreateClientC.self)
+            guard let c = createClientFn(kCFAllocatorDefault) else { return }
+
+            self.client = c
+            self.createDigitizerRaw = cd
+            self.dispatchRaw = dp
+            self.scheduleRaw = sc
+
+            // schedule on this queue's run loop
+            let scheduleFn = unsafeBitCast(sc, to: ScheduleC.self)
+            scheduleFn(c, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
+
+            self.canSimulateTouches = true
+            self.queueInitialized = true
+
+            // keep run loop alive
+            while self.canSimulateTouches {
+                CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 1.0, true)
+            }
         }
-        handle = h
-
-        guard let cc = _dlsym(h, "IOHIDEventSystemClientCreate") else { debugLog.append("no CreateClient"); return }
-        let createClientFn = unsafeBitCast(cc, to: CreateClientC.self)
-        guard let c = createClientFn(kCFAllocatorDefault) else { debugLog.append("CreateClient returned nil"); return }
-        client = c
-
-        guard let cd = _dlsym(h, "IOHIDEventCreateDigitizerEvent") else { debugLog.append("no CreateDigitizer"); return }
-        createDigitizerRaw = cd
-
-        guard let ap = _dlsym(h, "IOHIDEventAppendEvent") else { debugLog.append("no Append"); return }
-        appendRaw = ap
-
-        guard let dp = _dlsym(h, "IOHIDEventSystemClientDispatchEvent") else { debugLog.append("no Dispatch"); return }
-        dispatchRaw = dp
-
-        canSimulateTouches = true
-        debugLog.append("IOKit loaded OK")
     }
 
     private func ts() -> UInt64 { _mach_absolute_time() }
@@ -78,54 +87,59 @@ final class TouchSimulator {
     private func makeEvent(touch: Bool, point: CGPoint) -> IOHIDRef? {
         guard let p = createDigitizerRaw else { return nil }
         let fn = unsafeBitCast(p, to: CreateDigitizerC.self)
-        let mask: UInt32 = 0x01 | 0x02 | 0x04
-        return fn(kCFAllocatorDefault, ts(), 3, 0, 2, mask, 0,
+        return fn(kCFAllocatorDefault, ts(), 3, 0, 2, 0x01|0x02|0x04, 0,
                   iofix(point.x), iofix(point.y), 0,
                   touch ? iofix(1.0) : 0, 0,
                   touch, touch, 0)
     }
 
-    private func dispatch(_ ev: IOHIDRef?) {
-        guard let c = client, let ev = ev, let dp = dispatchRaw else { return }
-        let dispatchFn = unsafeBitCast(dp, to: DispatchC.self)
-        dispatchFn(c, ev)
-    }
-
-    private func makeParent() -> IOHIDRef? {
-        nil
+    private func enqueue(_ work: @escaping () -> Void) {
+        eventQueue.sync {
+            guard self.queueInitialized, self.canSimulateTouches else { return }
+            work()
+        }
     }
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) {
-        guard canSimulateTouches else { return }
-        dispatch(makeEvent(touch: true, point: point))
+        enqueue {
+            guard let ev = self.makeEvent(touch: true, point: point),
+                  let c = self.client, let dp = self.dispatchRaw else { return }
+            let fn = unsafeBitCast(dp, to: DispatchC.self)
+            fn(c, ev)
+        }
     }
 
     func touchMove(to point: CGPoint, fingerId: Int32 = 0) {
-        guard canSimulateTouches else { return }
-        dispatch(makeEvent(touch: true, point: point))
+        enqueue {
+            guard let ev = self.makeEvent(touch: true, point: point),
+                  let c = self.client, let dp = self.dispatchRaw else { return }
+            let fn = unsafeBitCast(dp, to: DispatchC.self)
+            fn(c, ev)
+        }
     }
 
     func touchUp(at point: CGPoint, fingerId: Int32 = 0) {
-        guard canSimulateTouches else { return }
-        dispatch(makeEvent(touch: false, point: point))
+        enqueue {
+            guard let ev = self.makeEvent(touch: false, point: point),
+                  let c = self.client, let dp = self.dispatchRaw else { return }
+            let fn = unsafeBitCast(dp, to: DispatchC.self)
+            fn(c, ev)
+        }
     }
 
     func tap(at point: CGPoint) {
-        guard canSimulateTouches else { return }
         touchDown(at: point)
         usleep(60000)
         touchUp(at: point)
     }
 
     func longPress(at point: CGPoint, duration: TimeInterval) {
-        guard canSimulateTouches else { return }
         touchDown(at: point)
         usleep(UInt32(duration * 1_000_000))
         touchUp(at: point)
     }
 
     func swipe(from start: CGPoint, to end: CGPoint, duration: TimeInterval) {
-        guard canSimulateTouches else { return }
         let steps = max(5, Int(duration * 60))
         let step = useconds_t(duration / Double(steps) * 1_000_000)
         touchDown(at: start)
