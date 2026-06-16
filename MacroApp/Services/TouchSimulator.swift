@@ -12,15 +12,16 @@ typealias IOHIDRef = UnsafeMutableRawPointer
 private typealias CreateClientC = @convention(c) (CFAllocator?) -> IOHIDRef?
 private typealias DispatchC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
 private typealias CreateDigitizerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
+private typealias CreateFingerC = @convention(c) (CFAllocator?, UInt64, UInt32, UInt32, UInt32, Int32, Int32, Int32, Int32, Int32, Bool, Bool, UInt32) -> IOHIDRef?
+private typealias AppendEventC = @convention(c) (IOHIDRef?, IOHIDRef?) -> Void
 
 final class TouchSimulator {
     static let shared = TouchSimulator()
-
-    private var handle: UnsafeMutableRawPointer?
     private var client: IOHIDRef?
     private var createDigitizerRaw: UnsafeMutableRawPointer?
+    private var createFingerRaw: UnsafeMutableRawPointer?
+    private var appendRaw: UnsafeMutableRawPointer?
     private var dispatchRaw: UnsafeMutableRawPointer?
-
     private(set) var canSimulateTouches = false
 
     private init() {
@@ -32,14 +33,17 @@ final class TouchSimulator {
 
     private func loadIOKit() {
         guard let h = _dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else { return }
-        handle = h
         guard let cc = _dlsym(h, "IOHIDEventSystemClientCreate"),
               let cd = _dlsym(h, "IOHIDEventCreateDigitizerEvent"),
+              let cf = _dlsym(h, "IOHIDEventCreateDigitizerFingerEvent"),
+              let ap = _dlsym(h, "IOHIDEventAppendEvent"),
               let dp = _dlsym(h, "IOHIDEventSystemClientDispatchEvent") else { return }
         let fn = unsafeBitCast(cc, to: CreateClientC.self)
         guard let c = fn(kCFAllocatorDefault) else { return }
         client = c
         createDigitizerRaw = cd
+        createFingerRaw = cf
+        appendRaw = ap
         dispatchRaw = dp
         canSimulateTouches = true
     }
@@ -48,19 +52,30 @@ final class TouchSimulator {
     private func iofix(_ v: CGFloat) -> Int32 { Int32(v * 65536) }
 
     private func send(_ point: CGPoint, _ isDown: Bool, _ isUp: Bool) {
-        guard let c = client, let cd = createDigitizerRaw, let dp = dispatchRaw else { return }
-        let fn = unsafeBitCast(cd, to: CreateDigitizerC.self)
-        let mask: UInt32 = isUp ? 0x01 : (0x01 | 0x02 | 0x04)
-        guard let ev = fn(kCFAllocatorDefault, ts(), 11, 0, 2, mask, 0,
-                          iofix(point.x), iofix(point.y), 0,
-                          isDown ? iofix(1.0) : 0, 0,
-                          !isUp, !isUp, 0) else { return }
+        guard let c = client, let cd = createDigitizerRaw, let cf = createFingerRaw,
+              let ap = appendRaw, let dp = dispatchRaw else { return }
+
+        let time = ts()
+        let ix = iofix(point.x)
+        let iy = iofix(point.y)
+        let pr = isDown ? iofix(1.0) : 0
+        let touch = !isUp
+        let digMask: UInt32 = touch ? 0x07 : 0x01
+
+        let createDig = unsafeBitCast(cd, to: CreateDigitizerC.self)
+        guard let digEvent = createDig(kCFAllocatorDefault, time, 11, 0, 1, digMask, 0,
+                                       ix, iy, 0, pr, 0, touch, touch, 0) else { return }
+
+        let createFinger = unsafeBitCast(cf, to: CreateFingerC.self)
+        guard let fingerEvent = createFinger(kCFAllocatorDefault, time, 1, 1, digMask,
+                                             ix, iy, 0, pr, 0, touch, touch, 0) else { return }
+
+        let append = unsafeBitCast(ap, to: AppendEventC.self)
+        append(digEvent, fingerEvent)
+
         let dsp = unsafeBitCast(dp, to: DispatchC.self)
-        if Thread.isMainThread {
-            dsp(c, ev)
-        } else {
-            DispatchQueue.main.sync { dsp(c, ev) }
-        }
+        if Thread.isMainThread { dsp(c, digEvent) }
+        else { DispatchQueue.main.sync { dsp(c, digEvent) } }
     }
 
     func touchDown(at point: CGPoint, fingerId: Int32 = 0) { send(point, true, false) }
