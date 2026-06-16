@@ -30,9 +30,7 @@ jobs:
           #include <mach/mach_time.h>
           #include <stdlib.h>
           #include <unistd.h>
-          #include <string.h>
-          typedef void* IOHIDSystemRef;
-          typedef void* IOHIDRef;
+          typedef void* IOHIDSystemRef; typedef void* IOHIDRef;
           extern IOHIDSystemRef IOHIDEventSystemClientCreate(CFAllocatorRef);
           extern IOHIDRef IOHIDEventCreateDigitizerFingerEvent(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int, int, uint32_t);
           extern IOHIDRef IOHIDEventCreateDigitizerEvent(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int, int, uint32_t);
@@ -45,8 +43,10 @@ jobs:
           IOHIDRef e=IOHIDEventCreateDigitizerFingerEvent(NULL,mt,0,2,(t==2?1:7),F(x),F(y),0,F(t==2?0:1),0,t!=2,t!=2,0);
           IOHIDEventAppendEvent(p,e); IOHIDEventSystemClientDispatchEvent(cl,p); CFRelease(e);CFRelease(p);CFRelease(cl); return 0; }
           CEOF
-          clang -arch arm64 -isysroot /Applications/Xcode_15.4.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk -framework IOKit -framework CoreFoundation -o MacroApp/Resources/touch_helper /tmp/th.c
-          file MacroApp/Resources/touch_helper
+          clang -arch arm64 -isysroot /Applications/Xcode_15.4.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk -framework IOKit -framework CoreFoundation -o /tmp/th /tmp/th.c
+          mkdir -p MacroApp/Resources
+          xxd -i /tmp/th | sed 's/unsigned char /let helperBytes: [UInt8] = [/; s/unsigned int.*/]/; s/_tmp_th/helperBinary/' > MacroApp/Resources/HelperBinary.swift
+          echo "// Auto-generated helper binary" | cat - MacroApp/Resources/HelperBinary.swift > /tmp/hb.swift && mv /tmp/hb.swift MacroApp/Resources/HelperBinary.swift
 
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
